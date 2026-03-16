@@ -1568,6 +1568,7 @@ impl OpenSquirrel {
                         prompt_preamble,
                         None,
                         sa.remote_session_name.clone(),
+                        if sa.working_dir.is_empty() { None } else { Some(sa.working_dir.as_str()) },
                         cx,
                     );
                     let idx = app.agents.len() - 1;
@@ -1578,7 +1579,6 @@ impl OpenSquirrel {
                     a.scroll_offset = sa.scroll_offset;
                     a.favorite = sa.favorite;
                     a.auto_scroll = sa.auto_scroll;
-                    if !sa.working_dir.is_empty() { a.working_dir = sa.working_dir.clone(); }
                     a.remote_session_name = sa.remote_session_name.clone();
                     a.remote_line_cursor = sa.remote_line_cursor;
                     // Restore session for reconnection
@@ -1659,6 +1659,7 @@ impl OpenSquirrel {
                     Some(app.coordinator_preamble()),
                     None,
                     None,
+                    None,
                     cx,
                 );
             }
@@ -1674,6 +1675,7 @@ impl OpenSquirrel {
                 &app.config.last_machine.clone(),
                 AgentRole::Coordinator,
                 Some(app.coordinator_preamble()),
+                None,
                 None,
                 None,
                 cx,
@@ -1834,11 +1836,21 @@ impl OpenSquirrel {
         prompt_preamble: Option<String>,
         worker_assignment: Option<WorkerAssignment>,
         remote_session_name_override: Option<String>,
+        initial_workdir: Option<&str>,
         cx: &mut Context<Self>,
     ) -> usize {
         let agent_idx = self.agents.len();
         self.agents.push(AgentState::new(name, group, runtime_name));
-        let machine_target = self.resolve_machine_target(target_machine);
+        let mut machine_target = self.resolve_machine_target(target_machine);
+        // For local runs, use the agent's working dir so the subprocess cwd is correct
+        if machine_target.ssh_destination.is_none() {
+            if let Some(wd) = initial_workdir.filter(|s| !s.is_empty()) {
+                machine_target.workdir = Some(wd.to_string());
+            }
+        }
+        if let Some(wd) = initial_workdir.filter(|s| !s.is_empty()) {
+            self.agents[agent_idx].working_dir = wd.to_string();
+        }
         let remote_session_name = if machine_target.ssh_destination.is_some() {
             remote_session_name_override.or_else(|| Some(make_tmux_session_name(name)))
         } else {
@@ -2027,6 +2039,7 @@ impl OpenSquirrel {
                 AgentRole::Worker,
                 None,
                 Some(assignment),
+                None,
                 None,
                 cx,
             );
@@ -2409,14 +2422,12 @@ impl OpenSquirrel {
                         Some(self.coordinator_preamble()),
                         None,
                         None,
+                        if setup.selected_dir.is_empty() { None } else { Some(setup.selected_dir.as_str()) },
                         cx,
                     );
                     if n > edit_idx {
                         let last = self.agents.pop().unwrap();
                         self.agents.insert(edit_idx, last);
-                    }
-                    if !setup.selected_dir.is_empty() {
-                        self.agents[edit_idx].working_dir = setup.selected_dir.clone();
                     }
                     self.set_focus(edit_idx);
                 }
@@ -2433,11 +2444,9 @@ impl OpenSquirrel {
                     Some(self.coordinator_preamble()),
                     None,
                     None,
+                    if setup.selected_dir.is_empty() { None } else { Some(setup.selected_dir.as_str()) },
                     cx,
                 );
-                if !setup.selected_dir.is_empty() {
-                    self.agents[n].working_dir = setup.selected_dir.clone();
-                }
                 self.set_focus(n);
             }
 
@@ -3498,6 +3507,7 @@ impl OpenSquirrel {
         let role = self.agents[idx].role;
         let prompt_preamble = self.agents[idx].prompt_preamble.clone();
         let worker_assignment = self.agents[idx].worker_assignment.clone();
+        let workdir = self.agents[idx].working_dir.clone();
         // Kill old
         self.agents[idx].prompt_tx = None;
         self.agents[idx]._reader_task = None;
@@ -3513,6 +3523,7 @@ impl OpenSquirrel {
             prompt_preamble,
             worker_assignment,
             None,
+            if workdir.is_empty() { None } else { Some(workdir.as_str()) },
             cx,
         );
         if n > idx {
