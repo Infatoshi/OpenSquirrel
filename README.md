@@ -29,7 +29,25 @@ cargo build --release
 ./target/release/opensquirrel
 ```
 
-Requires Rust toolchain and macOS (Metal GPU).
+Requires Rust toolchain (≥ 1.85). Runs on macOS (Metal) and Linux (Vulkan, x86_64).
+
+### Linux prerequisites (Ubuntu/Debian)
+
+```bash
+sudo apt install -y \
+  build-essential cmake clang \
+  libvulkan-dev libwayland-dev \
+  libxkbcommon-dev libasound2-dev libfontconfig-dev libssl-dev
+```
+
+If `libxkbcommon-x11-dev` is not available as a package (older distros), create the linker symlink manually:
+
+```bash
+mkdir -p ~/.local/lib
+ln -sf /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0 ~/.local/lib/libxkbcommon-x11.so
+```
+
+The `.cargo/config.toml` in this repo already adds `~/.local/lib` to the linker search path.
 
 To run as a proper macOS `.app` bundle with the squirrel icon:
 
