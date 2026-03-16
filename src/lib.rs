@@ -57,64 +57,92 @@ pub fn parse_spans(line: &str) -> Vec<Span> {
     while i < len {
         // Inline code: `...`
         if chars[i] == '`' && !peek_is(&chars, i, "```") {
-            if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
-            i += 1;
-            let mut code = String::new();
-            while i < len && chars[i] != '`' {
-                code.push(chars[i]);
+            // Look ahead for closing backtick before committing
+            if let Some(close) = chars[i + 1..].iter().position(|&c| c == '`') {
+                if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
                 i += 1;
-            }
-            if i < len { i += 1; } // skip closing `
-            if !code.is_empty() {
-                spans.push(Span::Code(code));
+                let code: String = chars[i..i + close].iter().collect();
+                i += close + 1; // skip content + closing `
+                if !code.is_empty() {
+                    spans.push(Span::Code(code));
+                }
+            } else {
+                // No closing backtick — treat as literal text
+                buf.push('`');
+                i += 1;
             }
             continue;
         }
 
         // Bold italic: ***...***
         if peek_is(&chars, i, "***") {
-            if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
-            i += 3;
-            let mut inner = String::new();
-            while i < len && !peek_is(&chars, i, "***") {
-                inner.push(chars[i]);
-                i += 1;
+            // Look ahead for closing ***
+            let start = i + 3;
+            let mut close = None;
+            let mut j = start;
+            while j < len {
+                if peek_is(&chars, j, "***") { close = Some(j); break; }
+                j += 1;
             }
-            if peek_is(&chars, i, "***") { i += 3; }
-            if !inner.is_empty() {
-                spans.push(Span::BoldItalic(inner));
+            if let Some(end) = close {
+                if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
+                let inner: String = chars[start..end].iter().collect();
+                i = end + 3;
+                if !inner.is_empty() {
+                    spans.push(Span::BoldItalic(inner));
+                }
+            } else {
+                // No closing *** — treat as literal text
+                buf.push_str("***");
+                i += 3;
             }
             continue;
         }
 
         // Bold: **...**
         if peek_is(&chars, i, "**") && !peek_is(&chars, i, "***") {
-            if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
-            i += 2;
-            let mut inner = String::new();
-            while i < len && !peek_is(&chars, i, "**") {
-                inner.push(chars[i]);
-                i += 1;
+            let start = i + 2;
+            let mut close = None;
+            let mut j = start;
+            while j < len {
+                if peek_is(&chars, j, "**") { close = Some(j); break; }
+                j += 1;
             }
-            if peek_is(&chars, i, "**") { i += 2; }
-            if !inner.is_empty() {
-                spans.push(Span::Bold(inner));
+            if let Some(end) = close {
+                if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
+                let inner: String = chars[start..end].iter().collect();
+                i = end + 2;
+                if !inner.is_empty() {
+                    spans.push(Span::Bold(inner));
+                }
+            } else {
+                // No closing ** — treat as literal text
+                buf.push_str("**");
+                i += 2;
             }
             continue;
         }
 
         // Italic: *...*  (single * not followed by another *)
         if chars[i] == '*' && !peek_is(&chars, i, "**") {
-            if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
-            i += 1;
-            let mut inner = String::new();
-            while i < len && !(chars[i] == '*' && !peek_is(&chars, i, "**")) {
-                inner.push(chars[i]);
-                i += 1;
+            let start = i + 1;
+            let mut close = None;
+            let mut j = start;
+            while j < len {
+                if chars[j] == '*' && !peek_is(&chars, j, "**") { close = Some(j); break; }
+                j += 1;
             }
-            if i < len && chars[i] == '*' { i += 1; }
-            if !inner.is_empty() {
-                spans.push(Span::Italic(inner));
+            if let Some(end) = close {
+                if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
+                let inner: String = chars[start..end].iter().collect();
+                i = end + 1;
+                if !inner.is_empty() {
+                    spans.push(Span::Italic(inner));
+                }
+            } else {
+                // No closing * — treat as literal text
+                buf.push('*');
+                i += 1;
             }
             continue;
         }
@@ -351,6 +379,72 @@ mod tests {
             Span::Text(" the ".into()),
             Span::Italic("output".into()),
         ]);
+    }
+
+    // ── Unclosed delimiter tests ───────────────────────────────
+
+    #[test]
+    fn test_unclosed_backtick() {
+        // Unclosed backtick should be treated as literal text, not swallowed
+        assert_eq!(
+            parse_spans("hello `world"),
+            vec![Span::Text("hello `world".into())]
+        );
+    }
+
+    #[test]
+    fn test_unclosed_backtick_at_end() {
+        assert_eq!(
+            parse_spans("hello `"),
+            vec![Span::Text("hello `".into())]
+        );
+    }
+
+    #[test]
+    fn test_unclosed_bold() {
+        assert_eq!(
+            parse_spans("hello **world"),
+            vec![Span::Text("hello **world".into())]
+        );
+    }
+
+    #[test]
+    fn test_unclosed_italic() {
+        assert_eq!(
+            parse_spans("hello *world"),
+            vec![Span::Text("hello *world".into())]
+        );
+    }
+
+    #[test]
+    fn test_unclosed_bold_italic() {
+        assert_eq!(
+            parse_spans("hello ***world"),
+            vec![Span::Text("hello ***world".into())]
+        );
+    }
+
+    #[test]
+    fn test_unclosed_backtick_with_closed_after() {
+        // First backtick pair is properly closed; should still work
+        assert_eq!(
+            parse_spans("`ok` then `broken"),
+            vec![
+                Span::Code("ok".into()),
+                Span::Text(" then `broken".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_unclosed_bold_with_closed_after() {
+        assert_eq!(
+            parse_spans("**ok** then **broken"),
+            vec![
+                Span::Bold("ok".into()),
+                Span::Text(" then **broken".into()),
+            ]
+        );
     }
 
     #[test]
