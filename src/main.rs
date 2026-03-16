@@ -2937,7 +2937,13 @@ impl OpenSquirrel {
             let trimmed = s.trim_end();
             if trimmed.is_empty() { a.input_cursor = 0; }
             else {
-                let last_space = trimmed.rfind(|c: char| c.is_whitespace()).map(|i| i + 1).unwrap_or(0);
+                // Use char_indices to find the byte offset *after* the last whitespace char,
+                // which is safe for multi-byte whitespace (e.g. U+3000 ideographic space).
+                let last_space = trimmed.char_indices()
+                    .filter(|(_, c)| c.is_whitespace())
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(0);
                 a.input_cursor = last_space;
             }
         }
@@ -2982,8 +2988,16 @@ impl OpenSquirrel {
             if a.input_cursor > 0 {
                 let s = &a.input_buffer[..a.input_cursor];
                 let trimmed = s.trim_end();
+                // Use char_indices to find the byte offset *after* the last whitespace char,
+                // which is safe for multi-byte whitespace (e.g. U+3000 ideographic space).
                 let target = if trimmed.is_empty() { 0 }
-                    else { trimmed.rfind(|c: char| c.is_whitespace()).map(|i| i + 1).unwrap_or(0) };
+                    else {
+                        trimmed.char_indices()
+                            .filter(|(_, c)| c.is_whitespace())
+                            .last()
+                            .map(|(i, c)| i + c.len_utf8())
+                            .unwrap_or(0)
+                    };
                 a.input_buffer.drain(target..a.input_cursor);
                 a.input_cursor = target;
             }

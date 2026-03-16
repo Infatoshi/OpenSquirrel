@@ -423,3 +423,86 @@ fn theme_cycling() {
     assert_eq!(current_idx, 0);
     assert_eq!(themes[current_idx], "midnight");
 }
+
+// ── Cursor / UTF-8 safety tests ──────────────────────────────────
+
+/// Simulates the word-boundary logic used by cursor_word_left and delete_word_back.
+/// Given a buffer and cursor byte offset, returns the target byte offset.
+fn word_left_target(buf: &str, cursor: usize) -> usize {
+    let s = &buf[..cursor];
+    let trimmed = s.trim_end();
+    if trimmed.is_empty() {
+        0
+    } else {
+        trimmed
+            .char_indices()
+            .filter(|(_, c)| c.is_whitespace())
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0)
+    }
+}
+
+#[test]
+fn word_left_ascii() {
+    let buf = "hello world";
+    // Cursor at end → should jump to byte 6 (start of "world")
+    assert_eq!(word_left_target(buf, buf.len()), 6);
+    // Cursor at 6 → should jump to 0 (no whitespace before "hello")
+    assert_eq!(word_left_target(buf, 6), 0);
+}
+
+#[test]
+fn word_left_multibyte_whitespace() {
+    // U+3000 IDEOGRAPHIC SPACE is a 3-byte whitespace character (0xE3 0x80 0x80).
+    // The old `rfind(whitespace) + 1` would land at byte 6 (mid-char), causing a panic.
+    let buf = "hello\u{3000}world";
+    // "hello" = 5 bytes, U+3000 = 3 bytes, "world" = 5 bytes → total 13 bytes
+    assert_eq!(buf.len(), 13);
+    // Cursor at end → should land at byte 8 (after the ideographic space)
+    assert_eq!(word_left_target(buf, buf.len()), 8);
+    // Verify byte 8 is a valid char boundary
+    assert!(buf.is_char_boundary(8));
+}
+
+#[test]
+fn word_left_multibyte_content() {
+    // "café world" — 'é' is 2 bytes (U+00E9)
+    let buf = "café world";
+    assert_eq!(buf.len(), 11); // c(1) a(1) f(1) é(2) ' '(1) w(1) o(1) r(1) l(1) d(1)
+    // Cursor at end → should land at byte 6 (after the space)
+    let target = word_left_target(buf, buf.len());
+    assert_eq!(target, 6);
+    assert!(buf.is_char_boundary(target));
+    assert_eq!(&buf[target..], "world");
+}
+
+#[test]
+fn word_left_emoji_content() {
+    // "🦊 run fast" — fox emoji is 4 bytes
+    let buf = "🦊 run fast";
+    // 🦊(4) ' '(1) r(1) u(1) n(1) ' '(1) f(1) a(1) s(1) t(1) → 13 bytes
+    assert_eq!(buf.len(), 13);
+    // Cursor at end → should land at byte 9 (start of "fast")
+    let target = word_left_target(buf, buf.len());
+    assert_eq!(target, 9);
+    assert!(buf.is_char_boundary(target));
+    assert_eq!(&buf[target..], "fast");
+}
+
+#[test]
+fn word_left_no_whitespace() {
+    let buf = "helloworld";
+    assert_eq!(word_left_target(buf, buf.len()), 0);
+}
+
+#[test]
+fn word_left_only_whitespace() {
+    let buf = "   ";
+    assert_eq!(word_left_target(buf, buf.len()), 0);
+}
+
+#[test]
+fn word_left_empty() {
+    assert_eq!(word_left_target("", 0), 0);
+}
