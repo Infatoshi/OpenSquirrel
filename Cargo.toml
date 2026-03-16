@@ -6,7 +6,7 @@ description = "GPU-rendered, keyboard-driven agent tiling manager"
 license = "MIT"
 
 [dependencies]
-gpui = "0.2"
+gpui = { version = "0.2", features = ["runtime_shaders"] }
 async-channel = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
