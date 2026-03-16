@@ -3951,7 +3951,7 @@ impl OpenSquirrel {
 
         let mut tile = div()
             .id(ElementId::Name(format!("tile-{}", idx).into()))
-            .flex_grow().flex_shrink().min_w(px(0.)).h_full()
+            .flex_grow().flex_shrink().flex_basis(px(0.)).min_w(px(0.)).h_full()
             .bg(self.bg_alpha(t.bg())).flex().flex_col().overflow_hidden()
             .cursor_pointer()
             .shadow(tile_shadow)
