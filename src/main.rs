@@ -1,3 +1,4 @@
+#![allow(unreachable_patterns)]
 use gpui::prelude::*;
 use gpui::*;
 use serde::{Deserialize, Serialize};
@@ -926,8 +927,7 @@ impl TokenStats {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
-    Command,
-    Insert,
+    Normal,
     Palette,
     Setup,
     Search,
@@ -1488,7 +1488,7 @@ impl OpenSquirrel {
         let theme = Self::resolve_theme(&config.theme, &themes);
 
         let mut app = Self {
-            mode: Mode::Command,
+            mode: Mode::Normal,
             agents: Vec::new(),
             groups: if groups.is_empty() { vec![Group { name: "default".into() }] } else { groups },
             focused_group: 0, focused_agent: 0,
@@ -2424,20 +2424,17 @@ impl OpenSquirrel {
             self.save_config();
             self.save_state();
         }
-        self.set_mode(Mode::Command);
+        self.set_mode(Mode::Normal);
     }
 
     // ── Actions ─────────────────────────────────────────────────
 
     fn enter_command_mode(&mut self, _: &EnterCommandMode, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode == Mode::Setup { self.setup = None; } // cancel setup
-        self.set_mode(Mode::Command);
+        if self.mode == Mode::Setup { self.setup = None; }
+        if self.mode == Mode::Search { self.search_query.clear(); }
+        self.set_mode(Mode::Normal);
         self.palette_input.clear();
         cx.notify();
-    }
-
-    fn enter_insert_mode(&mut self, _: &EnterInsertMode, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode == Mode::Command { self.set_mode(Mode::Insert); cx.notify(); }
     }
 
     fn open_palette(&mut self, _: &OpenPalette, _w: &mut Window, cx: &mut Context<Self>) {
@@ -2448,14 +2445,14 @@ impl OpenSquirrel {
     }
 
     fn close_palette(&mut self, _: &ClosePalette, _w: &mut Window, cx: &mut Context<Self>) {
-        self.set_mode(Mode::Command);
+        self.set_mode(Mode::Normal);
         self.palette_input.clear();
         cx.notify();
     }
 
     fn submit_input(&mut self, _: &SubmitInput, _w: &mut Window, cx: &mut Context<Self>) {
         match self.mode {
-            Mode::Insert => {
+            Mode::Normal => {
                 self.clamp_focus();
                 let idx = self.focused_agent;
                 if idx >= self.agents.len() { return; }
@@ -2464,7 +2461,7 @@ impl OpenSquirrel {
                 if prompt.is_empty() { return; }
                 self.agents[idx].input_buffer.clear();
                 self.agents[idx].input_cursor = 0;
-                self.set_mode(Mode::Command);
+                self.set_mode(Mode::Normal);
                 self.send_prompt(idx, prompt, cx);
             }
             Mode::Palette => {
@@ -2476,23 +2473,23 @@ impl OpenSquirrel {
                             self.groups.push(Group { name: format!("group-{}", n) });
                             self.focused_group = n;
                             self.save_config();
-                            self.set_mode(Mode::Command);
+                            self.set_mode(Mode::Normal);
                         }
                         PaletteAction::SetTheme(name) => {
                             let name = name.clone();
                             self.set_theme(&name);
-                            self.set_mode(Mode::Command);
+                            self.set_mode(Mode::Normal);
                         }
                         PaletteAction::SetView(vm) => {
                             self.view_mode = *vm;
-                            self.set_mode(Mode::Command);
+                            self.set_mode(Mode::Normal);
                         }
                         PaletteAction::ToggleSidebarTab => {
                             self.sidebar_tab = match self.sidebar_tab {
                                 SidebarTab::Agents => SidebarTab::Workers,
                                 SidebarTab::Workers => SidebarTab::Agents,
                             };
-                            self.set_mode(Mode::Command);
+                            self.set_mode(Mode::Normal);
                         }
                         PaletteAction::ToggleCautiousEnter => {
                             self.config.cautious_enter = !self.config.cautious_enter;
@@ -2511,7 +2508,7 @@ impl OpenSquirrel {
                             if let Some(a) = self.agents.get_mut(self.focused_agent) {
                                 a.output_lines.push(format!("[voice] mic set to: {}", name));
                             }
-                            self.set_mode(Mode::Command);
+                            self.set_mode(Mode::Normal);
                         }
                         PaletteAction::CompactContext => {
                             self.clamp_focus();
@@ -2525,7 +2522,7 @@ impl OpenSquirrel {
                                     _ => "/compact",
                                 };
                                 let prompt = compact_cmd.to_string();
-                                self.set_mode(Mode::Command);
+                                self.set_mode(Mode::Normal);
                                 self.send_prompt(idx, prompt, cx);
                             }
                         }
@@ -2538,12 +2535,12 @@ impl OpenSquirrel {
                                 self.agents[idx].status = AgentStatus::Idle;
                                 self.agents[idx].output_lines.push("[killed]".into());
                             }
-                            self.set_mode(Mode::Command);
+                            self.set_mode(Mode::Normal);
                         }
                         PaletteAction::Quit => { cx.quit(); return; }
                     }
                 } else {
-                    self.set_mode(Mode::Command);
+                    self.set_mode(Mode::Normal);
                 }
                 self.palette_input.clear();
                 cx.notify();
@@ -2585,7 +2582,7 @@ impl OpenSquirrel {
                         a.scroll_offset = line_idx.saturating_sub(5);
                     }
                 }
-                self.set_mode(Mode::Command);
+                self.set_mode(Mode::Normal);
                 self.search_query.clear();
                 cx.notify();
             }
@@ -2595,7 +2592,7 @@ impl OpenSquirrel {
 
     fn delete_char(&mut self, _: &DeleteChar, _w: &mut Window, cx: &mut Context<Self>) {
         match self.mode {
-            Mode::Insert => {
+            Mode::Normal => {
                 if let Some(a) = self.agents.get_mut(self.focused_agent) {
                     if a.input_cursor > 0 {
                         // Find previous char boundary
@@ -2665,10 +2662,9 @@ impl OpenSquirrel {
     }
 
     fn handle_key_down(&mut self, event: &KeyDownEvent, _w: &mut Window, cx: &mut Context<Self>) {
-        // Text input modes: Insert, Palette, Search, and Setup/Model (for fuzzy filter)
-        let is_setup_model = self.mode == Mode::Setup
-            && self.setup.as_ref().map(|s| s.step == SetupStep::Model).unwrap_or(false);
-        if self.mode == Mode::Insert || self.mode == Mode::Palette || self.mode == Mode::Search || is_setup_model {
+        let is_setup_typing = self.mode == Mode::Setup
+            && self.setup.as_ref().map(|s| matches!(s.step, SetupStep::Model | SetupStep::Directory)).unwrap_or(false);
+        if self.mode == Mode::Normal || self.mode == Mode::Palette || self.mode == Mode::Search || is_setup_typing {
             if event.keystroke.modifiers.platform || event.keystroke.modifiers.control || event.keystroke.modifiers.alt { return; }
             match event.keystroke.key.as_str() {
                 "escape" | "enter" | "backspace" | "tab" | "left" | "right" | "up" | "down" => return,
@@ -2676,7 +2672,7 @@ impl OpenSquirrel {
             }
             if let Some(ch) = &event.keystroke.key_char {
                 match self.mode {
-                    Mode::Insert => {
+                    Mode::Normal => {
                         if let Some(a) = self.agents.get_mut(self.focused_agent) {
                             a.input_buffer.insert_str(a.input_cursor, ch);
                             a.input_cursor += ch.len();
@@ -2869,7 +2865,7 @@ impl OpenSquirrel {
     // ── Text editing (Insert mode) ────────────────────────────────
 
     fn cursor_left(&mut self, _: &CursorLeft, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Insert { return; }
+        if self.mode != Mode::Normal { return; }
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             if a.input_cursor > 0 {
                 a.input_cursor = a.input_buffer[..a.input_cursor]
@@ -2880,7 +2876,7 @@ impl OpenSquirrel {
     }
 
     fn cursor_right(&mut self, _: &CursorRight, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Insert { return; }
+        if self.mode != Mode::Normal { return; }
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             if a.input_cursor < a.input_buffer.len() {
                 a.input_cursor = a.input_buffer[a.input_cursor..]
@@ -2892,7 +2888,7 @@ impl OpenSquirrel {
     }
 
     fn cursor_word_left(&mut self, _: &CursorWordLeft, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Insert { return; }
+        if self.mode != Mode::Normal { return; }
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             let s = &a.input_buffer[..a.input_cursor];
             // Skip trailing whitespace, then skip word chars
@@ -2907,7 +2903,7 @@ impl OpenSquirrel {
     }
 
     fn cursor_word_right(&mut self, _: &CursorWordRight, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Insert { return; }
+        if self.mode != Mode::Normal { return; }
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             let s = &a.input_buffer[a.input_cursor..];
             // Skip current word chars, then skip whitespace
@@ -2919,7 +2915,7 @@ impl OpenSquirrel {
     }
 
     fn cursor_home(&mut self, _: &CursorHome, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Insert { return; }
+        if self.mode != Mode::Normal { return; }
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             // Go to start of current line
             let before = &a.input_buffer[..a.input_cursor];
@@ -2929,7 +2925,7 @@ impl OpenSquirrel {
     }
 
     fn cursor_end(&mut self, _: &CursorEnd, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Insert { return; }
+        if self.mode != Mode::Normal { return; }
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             // Go to end of current line
             let after = &a.input_buffer[a.input_cursor..];
@@ -2939,7 +2935,7 @@ impl OpenSquirrel {
     }
 
     fn delete_word_back(&mut self, _: &DeleteWordBack, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Insert { return; }
+        if self.mode != Mode::Normal { return; }
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             if a.input_cursor > 0 {
                 let s = &a.input_buffer[..a.input_cursor];
@@ -2954,7 +2950,7 @@ impl OpenSquirrel {
     }
 
     fn delete_to_start(&mut self, _: &DeleteToStart, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Insert { return; }
+        if self.mode != Mode::Normal { return; }
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             if a.input_cursor > 0 {
                 // Delete to start of current line
@@ -2968,7 +2964,7 @@ impl OpenSquirrel {
     }
 
     fn insert_newline(&mut self, _: &InsertNewline, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Insert { return; }
+        if self.mode != Mode::Normal { return; }
         if !self.config.cautious_enter {
             self.submit_input(&SubmitInput, _w, cx);
             return;
@@ -2981,7 +2977,7 @@ impl OpenSquirrel {
     }
 
     fn paste_clipboard(&mut self, _: &PasteClipboard, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Insert { return; }
+        if self.mode != Mode::Normal { return; }
         if let Some(clip) = cx.read_from_clipboard() {
             let text = clip.text().unwrap_or_default();
             if !text.is_empty() {
@@ -2997,7 +2993,7 @@ impl OpenSquirrel {
     // Navigation
     fn nav_up(&mut self, _: &NavUp, _w: &mut Window, cx: &mut Context<Self>) {
         match self.mode {
-            Mode::Command => {
+            Mode::Normal => {
                 self.focused_group = self.focused_group.saturating_sub(1);
                 self.clamp_focus();
             }
@@ -3032,7 +3028,7 @@ impl OpenSquirrel {
 
     fn nav_down(&mut self, _: &NavDown, _w: &mut Window, cx: &mut Context<Self>) {
         match self.mode {
-            Mode::Command => {
+            Mode::Normal => {
                 if self.focused_group < self.groups.len().saturating_sub(1) { self.focused_group += 1; }
                 self.clamp_focus();
             }
@@ -3091,7 +3087,7 @@ impl OpenSquirrel {
     }
 
     fn pane_left(&mut self, _: &PaneLeft, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         let vis = self.agents_in_current_group();
         if vis.is_empty() { return; }
         if let Some(pos) = vis.iter().position(|&i| i == self.focused_agent) {
@@ -3101,7 +3097,7 @@ impl OpenSquirrel {
     }
 
     fn pane_right(&mut self, _: &PaneRight, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         let vis = self.agents_in_current_group();
         if vis.is_empty() { return; }
         if let Some(pos) = vis.iter().position(|&i| i == self.focused_agent) {
@@ -3145,14 +3141,14 @@ impl OpenSquirrel {
     }
 
     fn scroll_up(&mut self, _: &ScrollUp, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         if let Some(a) = self.agents.get_mut(self.focused_agent) { a.scroll_offset = a.scroll_offset.saturating_sub(3); }
         cx.notify();
     }
 
     fn scroll_down(&mut self, _: &ScrollDown, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             let max = a.output_lines.len().saturating_sub(1);
@@ -3162,14 +3158,14 @@ impl OpenSquirrel {
     }
 
     fn scroll_page_up(&mut self, _: &ScrollPageUp, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         if let Some(a) = self.agents.get_mut(self.focused_agent) { a.scroll_offset = a.scroll_offset.saturating_sub(20); }
         cx.notify();
     }
 
     fn scroll_page_down(&mut self, _: &ScrollPageDown, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             let max = a.output_lines.len().saturating_sub(1);
@@ -3179,14 +3175,14 @@ impl OpenSquirrel {
     }
 
     fn scroll_to_top(&mut self, _: &ScrollToTop, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         if let Some(a) = self.agents.get_mut(self.focused_agent) { a.scroll_offset = 0; }
         cx.notify();
     }
 
     fn scroll_to_bottom(&mut self, _: &ScrollToBottom, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             let len = a.output_lines.len();
@@ -3197,7 +3193,7 @@ impl OpenSquirrel {
 
     fn toggle_voice(&mut self, _: &ToggleVoice, _w: &mut Window, cx: &mut Context<Self>) {
         if !VOICE_ENABLED { return; }
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
 
         if self.voice_recording {
@@ -3409,7 +3405,7 @@ impl OpenSquirrel {
     }
 
     fn spawn_agent(&mut self, _: &SpawnAgent, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.start_setup();
         cx.notify();
     }
@@ -3418,7 +3414,7 @@ impl OpenSquirrel {
     fn zoom_out(&mut self, _: &ZoomOut, _w: &mut Window, cx: &mut Context<Self>) { self.ui_scale = (self.ui_scale - 0.1).max(0.5); cx.notify(); }
     fn zoom_reset(&mut self, _: &ZoomReset, _w: &mut Window, cx: &mut Context<Self>) { self.ui_scale = 1.0; cx.notify(); }
     fn kill_agent(&mut self, _: &KillAgent, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         let idx = self.focused_agent;
         if idx < self.agents.len() {
@@ -3432,7 +3428,7 @@ impl OpenSquirrel {
     }
 
     fn toggle_favorite(&mut self, _: &ToggleFavorite, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             a.favorite = !a.favorite;
@@ -3441,13 +3437,13 @@ impl OpenSquirrel {
     }
 
     fn change_agent(&mut self, _: &ChangeAgent, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.start_change_agent(cx);
         cx.notify();
     }
 
     fn restart_agent(&mut self, _: &RestartAgent, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         let idx = self.focused_agent;
         if idx >= self.agents.len() { return; }
@@ -3486,7 +3482,7 @@ impl OpenSquirrel {
     }
 
     fn toggle_auto_scroll(&mut self, _: &ToggleAutoScroll, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             a.auto_scroll = !a.auto_scroll;
@@ -3545,7 +3541,7 @@ impl OpenSquirrel {
     }
 
     fn open_terminal(&mut self, _: &OpenTerminal, _w: &mut Window, _cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         let idx = self.focused_agent;
         if idx < self.agents.len() {
@@ -3557,7 +3553,7 @@ impl OpenSquirrel {
     }
 
     fn pipe_to_agent(&mut self, _: &PipeToAgent, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         let idx = self.focused_agent;
         if idx >= self.agents.len() { return; }
@@ -3584,7 +3580,7 @@ impl OpenSquirrel {
     }
 
     fn continue_turn(&mut self, _: &ContinueTurn, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.clamp_focus();
         let idx = self.focused_agent;
         self.continue_pending_turn(idx, cx);
@@ -3592,20 +3588,20 @@ impl OpenSquirrel {
     }
 
     fn view_grid(&mut self, _: &ViewGrid, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.view_mode = ViewMode::Grid; cx.notify();
     }
     fn view_pipeline(&mut self, _: &ViewPipeline, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.view_mode = ViewMode::Pipeline; cx.notify();
     }
     fn view_focus(&mut self, _: &ViewFocus, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.view_mode = ViewMode::Focus; cx.notify();
     }
 
     fn search_open(&mut self, _: &SearchOpen, _w: &mut Window, cx: &mut Context<Self>) {
-        if self.mode != Mode::Command { return; }
+        if self.mode != Mode::Normal { return; }
         self.set_mode(Mode::Search);
         self.search_query.clear();
         self.search_results.clear();
@@ -3614,7 +3610,7 @@ impl OpenSquirrel {
     }
 
     fn search_close(&mut self, _: &SearchClose, _w: &mut Window, cx: &mut Context<Self>) {
-        self.set_mode(Mode::Command);
+        self.set_mode(Mode::Normal);
         self.search_query.clear();
         cx.notify();
     }
@@ -3820,8 +3816,9 @@ impl OpenSquirrel {
         );
 
         let (ml, mc) = match self.mode {
-            Mode::Command => ("COMMAND", t.blue()), Mode::Insert => ("INSERT", t.green()),
-            Mode::Palette => ("PALETTE", t.yellow()), Mode::Setup => ("SETUP", t.yellow()),
+            Mode::Normal => ("", t.text_faint()),
+            Mode::Palette => ("PALETTE", t.yellow()),
+            Mode::Setup => ("SETUP", t.yellow()),
             Mode::Search => ("SEARCH", t.yellow()),
         };
         let vl = match self.view_mode {
@@ -4218,7 +4215,7 @@ impl OpenSquirrel {
                     .flex_grow().w_full().cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.set_focus(idx);
-                        this.set_mode(Mode::Insert);
+                        this.set_mode(Mode::Normal);
                         cx.notify();
                     }))
             );
@@ -4411,30 +4408,25 @@ impl OpenSquirrel {
         }
         tile = tile.child(out);
 
-        // Input bar
+        // Input bar — always active
         if focused {
-            let bb = if self.mode == Mode::Insert { t.border_focus() } else { t.border() };
-            let tc = if self.mode == Mode::Insert { t.text() } else { t.text_faint() };
-            let pc = if self.mode == Mode::Insert { t.blue() } else { t.text_faint() };
-            let is_insert = self.mode == Mode::Insert;
+            let tc = t.text();
+            let pc = t.blue();
 
             let mut input_area = div()
                 .id(ElementId::Name(format!("input-click-{}", idx).into()))
                 .w_full().px(self.s(14.0)).py(self.s(10.0)).bg(t.surface())
-                .border_t_1().border_color(bb)
+                .border_t_1().border_color(t.border_focus())
                 .flex().flex_col().gap(self.s(4.0))
                 .font_family(self.font_family.clone()).text_size(self.s(fs))
                 .min_h(self.s(44.0))
                 .cursor_text()
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.set_focus(idx);
-                    if this.mode != Mode::Insert {
-                        this.set_mode(Mode::Insert);
-                    }
                     cx.notify();
                 }));
 
-            if is_insert {
+            {
                 // Show text with cursor indicator, supporting multiline
                 let lines: Vec<&str> = a.input_buffer.split('\n').collect();
                 let line_count = lines.len();
@@ -4485,14 +4477,6 @@ impl OpenSquirrel {
                             .child(format!("{} lines", line_count))
                     );
                 }
-            } else {
-                // Not in insert mode
-                let disp = if a.status == AgentStatus::Working { "..." } else { "" };
-                input_area = input_area.child(
-                    div().flex().items_center().gap(self.s(6.0))
-                        .child(div().text_color(pc).text_size(self.s(14.0)).child(" "))
-                        .child(div().text_color(tc).child(disp))
-                );
             }
             tile = tile.child(input_area);
         }
@@ -5424,7 +5408,7 @@ impl Render for OpenSquirrel {
         };
 
         let key_ctx = match self.mode {
-            Mode::Command => "CommandMode", Mode::Insert => "InsertMode",
+            Mode::Normal => "NormalMode",
             Mode::Palette => "PaletteMode", Mode::Setup => "SetupMode",
             Mode::Search => "SearchMode",
         };
@@ -5441,7 +5425,6 @@ impl Render for OpenSquirrel {
             .when(!is_ops, |d| d.bg(t.bg()))
             .flex().flex_col()
             .on_action(cx.listener(Self::enter_command_mode))
-            .on_action(cx.listener(Self::enter_insert_mode))
             .on_action(cx.listener(Self::open_palette))
             .on_action(cx.listener(Self::close_palette))
             .on_action(cx.listener(Self::submit_input))
@@ -6373,87 +6356,54 @@ fn main() {
 
     Application::new().with_assets(Assets).run(|app| {
         app.bind_keys([
-            // Always
+            // Escape: dismiss overlays (palette, setup, search)
             KeyBinding::new("escape", EnterCommandMode, None),
-            // Insert
-            KeyBinding::new("cmd-enter", SubmitInput, Some("InsertMode")),
-            KeyBinding::new("enter", InsertNewline, Some("InsertMode")),
-            KeyBinding::new("cmd-v", PasteClipboard, Some("InsertMode")),
-            KeyBinding::new("backspace", DeleteChar, Some("InsertMode")),
-            KeyBinding::new("left", CursorLeft, Some("InsertMode")),
-            KeyBinding::new("right", CursorRight, Some("InsertMode")),
-            KeyBinding::new("alt-left", CursorWordLeft, Some("InsertMode")),
-            KeyBinding::new("alt-right", CursorWordRight, Some("InsertMode")),
-            KeyBinding::new("cmd-left", CursorHome, Some("InsertMode")),
-            KeyBinding::new("cmd-right", CursorEnd, Some("InsertMode")),
-            KeyBinding::new("alt-backspace", DeleteWordBack, Some("InsertMode")),
-            KeyBinding::new("cmd-backspace", DeleteToStart, Some("InsertMode")),
-            // Palette
-            KeyBinding::new("enter", SubmitInput, Some("PaletteMode")),
-            KeyBinding::new("backspace", DeleteChar, Some("PaletteMode")),
-            KeyBinding::new("escape", ClosePalette, Some("PaletteMode")),
-            KeyBinding::new("up", NavUp, Some("PaletteMode")),
-            KeyBinding::new("down", NavDown, Some("PaletteMode")),
-            // Setup wizard
-            KeyBinding::new("tab", SetupNext, Some("SetupMode")),
-            KeyBinding::new("shift-tab", SetupPrev, Some("SetupMode")),
-            KeyBinding::new("space", SetupToggle, Some("SetupMode")),
-            KeyBinding::new("enter", SubmitInput, Some("SetupMode")),
-            KeyBinding::new("backspace", DeleteChar, Some("SetupMode")),
-            KeyBinding::new("up", NavUp, Some("SetupMode")),
-            KeyBinding::new("down", NavDown, Some("SetupMode")),
-            KeyBinding::new("ctrl-e", ToggleCustomEndpoint, Some("SetupMode")),
-            // Command
-            KeyBinding::new("i", EnterInsertMode, Some("CommandMode")),
-            KeyBinding::new("up", NavUp, Some("CommandMode")),
-            KeyBinding::new("down", NavDown, Some("CommandMode")),
-            KeyBinding::new("left", PaneLeft, Some("CommandMode")),
-            KeyBinding::new("right", PaneRight, Some("CommandMode")),
-            KeyBinding::new("k", ScrollUp, Some("CommandMode")),
-            KeyBinding::new("j", ScrollDown, Some("CommandMode")),
-            KeyBinding::new("ctrl-u", ScrollPageUp, Some("CommandMode")),
-            KeyBinding::new("ctrl-d", ScrollPageDown, Some("CommandMode")),
-            KeyBinding::new("g g", ScrollToTop, Some("CommandMode")),
-            KeyBinding::new("shift-g", ScrollToBottom, Some("CommandMode")),
-            KeyBinding::new("enter", ContinueTurn, Some("CommandMode")),
-            KeyBinding::new("n", SpawnAgent, Some("CommandMode")),
-            // theme cycling removed from command mode — use Cmd-K palette instead
-            KeyBinding::new("x", KillAgent, Some("CommandMode")),
-            KeyBinding::new("f", ToggleFavorite, Some("CommandMode")),
-            KeyBinding::new("c", ChangeAgent, Some("CommandMode")),
-            KeyBinding::new("r", RestartAgent, Some("CommandMode")),
-            KeyBinding::new("p", ToggleAutoScroll, Some("CommandMode")),
-            KeyBinding::new("|", PipeToAgent, Some("CommandMode")),
-            KeyBinding::new("g t", OpenTerminal, Some("CommandMode")),
-            KeyBinding::new("?", ShowStats, Some("CommandMode")),
-            KeyBinding::new("1", ViewGrid, Some("CommandMode")),
-            KeyBinding::new("2", ViewPipeline, Some("CommandMode")),
-            KeyBinding::new("3", ViewFocus, Some("CommandMode")),
-            KeyBinding::new("/", SearchOpen, Some("CommandMode")),
-            // KeyBinding::new("`", ToggleVoice, Some("CommandMode")), // voice disabled for v1
-            // quit removed from command mode — use Cmd-Q or palette instead
-            // Search mode
-            KeyBinding::new("escape", SearchClose, Some("SearchMode")),
-            KeyBinding::new("enter", SubmitInput, Some("SearchMode")),
-            KeyBinding::new("backspace", DeleteChar, Some("SearchMode")),
-            KeyBinding::new("up", NavUp, Some("SearchMode")),
-            KeyBinding::new("down", NavDown, Some("SearchMode")),
-            KeyBinding::new("ctrl-p", NavUp, Some("SearchMode")),
-            KeyBinding::new("ctrl-n", NavDown, Some("SearchMode")),
-            // Pane/group navigation (works in all modes)
+
+            // Text input (always active in Normal mode)
+            KeyBinding::new("enter", SubmitInput, None),
+            KeyBinding::new("cmd-v", PasteClipboard, None),
+            KeyBinding::new("backspace", DeleteChar, None),
+            KeyBinding::new("left", CursorLeft, None),
+            KeyBinding::new("right", CursorRight, None),
+            KeyBinding::new("alt-left", CursorWordLeft, None),
+            KeyBinding::new("alt-right", CursorWordRight, None),
+            KeyBinding::new("cmd-left", CursorHome, None),
+            KeyBinding::new("cmd-right", CursorEnd, None),
+            KeyBinding::new("alt-backspace", DeleteWordBack, None),
+            KeyBinding::new("cmd-backspace", DeleteToStart, None),
+
+            // Pane/group navigation
             KeyBinding::new("cmd-]", NextPane, None),
             KeyBinding::new("cmd-[", PrevPane, None),
             KeyBinding::new("cmd-}", NextGroup, None),
             KeyBinding::new("cmd-{", PrevGroup, None),
-            // Zoom
+
+            // App actions (Cmd- keybinds, always available)
+            KeyBinding::new("cmd-k", OpenPalette, None),
+            KeyBinding::new("cmd-shift-p", OpenPalette, None),
+            KeyBinding::new("cmd-n", SpawnAgent, None),
+            KeyBinding::new("cmd-f", SearchOpen, None),
             KeyBinding::new("cmd-=", ZoomIn, None),
             KeyBinding::new("cmd--", ZoomOut, None),
             KeyBinding::new("cmd-0", ZoomReset, None),
-            // Ctrl+K
-            KeyBinding::new("cmd-k", OpenPalette, Some("CommandMode")),
-            KeyBinding::new("cmd-shift-p", OpenPalette, Some("CommandMode")),
-            KeyBinding::new("cmd-k", OpenPalette, Some("InsertMode")),
-            KeyBinding::new("cmd-shift-p", OpenPalette, Some("InsertMode")),
+
+            // Palette overlay
+            KeyBinding::new("escape", ClosePalette, Some("PaletteMode")),
+            KeyBinding::new("up", NavUp, Some("PaletteMode")),
+            KeyBinding::new("down", NavDown, Some("PaletteMode")),
+
+            // Setup wizard overlay
+            KeyBinding::new("tab", SetupNext, Some("SetupMode")),
+            KeyBinding::new("shift-tab", SetupPrev, Some("SetupMode")),
+            KeyBinding::new("space", SetupToggle, Some("SetupMode")),
+            KeyBinding::new("up", NavUp, Some("SetupMode")),
+            KeyBinding::new("down", NavDown, Some("SetupMode")),
+            KeyBinding::new("ctrl-e", ToggleCustomEndpoint, Some("SetupMode")),
+
+            // Search overlay
+            KeyBinding::new("escape", SearchClose, Some("SearchMode")),
+            KeyBinding::new("up", NavUp, Some("SearchMode")),
+            KeyBinding::new("down", NavDown, Some("SearchMode")),
         ]);
 
         let opts = WindowOptions {
