@@ -1202,7 +1202,7 @@ impl AgentState {
 // ── Setup wizard state ──────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum SetupStep { Runtime, Model, Machine, Mcps, Confirm }
+enum SetupStep { Machine, Runtime, Model, Mcps, Confirm }
 
 struct SetupState {
     step: SetupStep,
@@ -2221,7 +2221,7 @@ impl OpenSquirrel {
         let last_model = rt.map(|r| r.last_model.clone()).unwrap_or_default();
         let model_cursor = rt.and_then(|r| r.models.iter().position(|m| m.id == last_model)).unwrap_or(0);
         self.setup = Some(SetupState {
-            step: SetupStep::Runtime,
+            step: SetupStep::Machine,
             runtime_cursor: rt_cursor,
             selected_runtime: rt.map(|r| r.name.clone()).unwrap_or_default(),
             model_cursor,
@@ -2262,7 +2262,7 @@ impl OpenSquirrel {
         let need_fetch_cursor = rt_name == "cursor";
 
         self.setup = Some(SetupState {
-            step: SetupStep::Runtime,
+            step: SetupStep::Machine,
             runtime_cursor: rt_cursor,
             selected_runtime: rt_name,
             model_cursor,
@@ -2635,6 +2635,15 @@ impl OpenSquirrel {
         let model_filter = s.model_filter.clone();
 
         match step {
+            SetupStep::Machine => {
+                let machine_name = self.config.machines.get(
+                    self.setup.as_ref().map(|s| s.machine_cursor).unwrap_or(0)
+                ).map(|m| m.name.clone()).unwrap_or_else(|| "local".into());
+                if let Some(ref mut s) = self.setup {
+                    s.selected_machine = machine_name;
+                    s.step = SetupStep::Runtime;
+                }
+            }
             SetupStep::Runtime => {
                 let rt_name = self.config.runtimes.get(runtime_cursor)
                     .map(|r| r.name.clone()).unwrap_or_default();
@@ -2661,14 +2670,12 @@ impl OpenSquirrel {
                 if custom_mode {
                     let field = self.setup.as_ref().map(|s| s.custom_field).unwrap_or(0);
                     if field < 2 {
-                        // Advance to next custom field
                         if let Some(ref mut s) = self.setup { s.custom_field = field + 1; }
                     } else {
-                        // All custom fields filled, advance to machine selection
                         let model_id = self.setup.as_ref().map(|s| s.custom_model_id.clone()).unwrap_or_default();
                         if let Some(ref mut s) = self.setup {
                             s.selected_model = model_id;
-                            s.step = SetupStep::Machine;
+                            s.step = SetupStep::Mcps;
                         }
                     }
                 } else {
@@ -2686,17 +2693,8 @@ impl OpenSquirrel {
                         .unwrap_or_default();
                     if let Some(ref mut s) = self.setup {
                         s.selected_model = sel_model;
-                        s.step = SetupStep::Machine;
+                        s.step = SetupStep::Mcps;
                     }
-                }
-            }
-            SetupStep::Machine => {
-                let machine_name = self.config.machines.get(
-                    self.setup.as_ref().map(|s| s.machine_cursor).unwrap_or(0)
-                ).map(|m| m.name.clone()).unwrap_or_else(|| "local".into());
-                if let Some(ref mut s) = self.setup {
-                    s.selected_machine = machine_name;
-                    s.step = SetupStep::Mcps;
                 }
             }
             SetupStep::Mcps => {
@@ -2710,10 +2708,10 @@ impl OpenSquirrel {
     fn setup_prev(&mut self, _: &SetupPrev, _w: &mut Window, cx: &mut Context<Self>) {
         if let Some(ref mut s) = self.setup {
             match s.step {
-                SetupStep::Runtime => {} // can't go back
+                SetupStep::Machine => {} // can't go back
+                SetupStep::Runtime => { s.step = SetupStep::Machine; }
                 SetupStep::Model => { s.step = SetupStep::Runtime; }
-                SetupStep::Machine => { s.step = SetupStep::Model; }
-                SetupStep::Mcps => { s.step = SetupStep::Machine; }
+                SetupStep::Mcps => { s.step = SetupStep::Model; }
                 SetupStep::Confirm => { s.step = SetupStep::Mcps; }
             }
         }
