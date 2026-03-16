@@ -391,6 +391,22 @@ fn whisper_model_exists(model_name: &str) -> bool {
     whisper_model_path(model_name).exists()
 }
 
+fn open_in_terminal(dir: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("open").arg("-a").arg("Terminal").arg(dir).spawn();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        for terminal in &["xdg-terminal-exec", "gnome-terminal", "konsole", "xterm", "alacritty", "kitty", "foot"] {
+            if Command::new(terminal).current_dir(dir).spawn().is_ok() {
+                return;
+            }
+        }
+        let _ = Command::new("xdg-open").arg(dir).spawn();
+    }
+}
+
 fn list_audio_input_devices() -> Vec<String> {
     let host = cpal::default_host();
     let mut names = Vec::new();
@@ -697,7 +713,7 @@ impl Default for AppConfig {
             last_mcps: vec![],
             groups: vec!["default".into()],
             theme: "midnight".into(),
-            font_family: "Menlo".into(),
+            font_family: if cfg!(target_os = "macos") { "Menlo" } else { "Monospace" }.into(),
             font_size: 15.0,
             whisper_model: default_whisper_model(),
             audio_device: String::new(),
@@ -3588,7 +3604,7 @@ impl OpenSquirrel {
         if idx < self.agents.len() {
             let dir = &self.agents[idx].working_dir;
             if !dir.is_empty() {
-                let _ = Command::new("open").arg("-a").arg("Terminal").arg(dir).spawn();
+                open_in_terminal(dir);
             }
         }
     }
@@ -3902,7 +3918,7 @@ impl OpenSquirrel {
                     .rounded(self.s(3.0)).bg(self.bg_alpha(t.surface_raised()))
                     .text_color(t.user_input())
                     .text_size(self.s(self.font_size - 1.0))
-                    .font_family(SharedString::from("Menlo"))
+                    .font_family(SharedString::from(if cfg!(target_os = "macos") { "Menlo" } else { "Monospace" }))
                     .child(s.clone())
             ),
             Span::Bold(s) => parent.child(
@@ -4075,7 +4091,7 @@ impl OpenSquirrel {
                             this.agents[idx].working_dir.clone()
                         } else { String::new() };
                         if !dir.is_empty() {
-                            let _ = Command::new("open").arg("-a").arg("Terminal").arg(&dir).spawn();
+                            open_in_terminal(&dir);
                         }
                     }))
             );
@@ -4361,7 +4377,7 @@ impl OpenSquirrel {
                         div().w_full().px(self.s(8.0)).py(self.s(1.0))
                             .bg(self.bg_alpha(t.surface_raised()))
                             .text_size(self.s(fs - 1.0)).text_color(t.text())
-                            .font_family(SharedString::from("Menlo"))
+                            .font_family(SharedString::from(if cfg!(target_os = "macos") { "Menlo" } else { "Monospace" }))
                             .child(bline.clone())
                     );
                     j += 1;
@@ -5271,7 +5287,7 @@ impl OpenSquirrel {
         if self.config.terminal_text {
             self.font_family.clone().into()
         } else {
-            SharedString::from("Helvetica Neue")
+            SharedString::from(if cfg!(target_os = "macos") { "Helvetica Neue" } else { "Sans" })
         }
     }
 

@@ -1,0 +1,3 @@
+[toolchain]
+channel = "stable"
+# Minimum required: 1.85.0 (Rust 2024 edition)
