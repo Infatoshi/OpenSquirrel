@@ -54,21 +54,21 @@ Note: macOS `.app` bundles don't inherit your shell PATH. If agents like `claude
 
 ## Keybinds
 
+No vim modes — text input is always active. All actions use standard Cmd- keybinds.
+
 | Key | Action |
 |-----|--------|
-| `Esc` | Command mode |
-| `i` | Insert mode (type prompts) |
 | `Enter` | Send prompt |
-| `Cmd-]` / `Cmd-[` | Next/prev pane |
-| `Cmd-}` / `Cmd-{` | Next/prev group |
-| `j/k` | Scroll transcript |
-| `n` | New agent |
-| `c` | Change agent config |
-| `r` | Restart agent |
-| `x` | Kill agent |
-| `/` | Search |
-| `Cmd-K` | Command palette (themes, settings, compact context) |
-| `1/2/3` | Grid / pipeline / focus view |
+| `Escape` | Dismiss overlay (palette, setup wizard, search) |
+| `Cmd-N` | New agent (opens setup wizard) |
+| `Cmd-K` | Command palette (themes, settings, compact context, kill, views) |
+| `Cmd-F` | Search transcripts |
+| `Cmd-]` / `Cmd-[` | Next / prev pane within group |
+| `Cmd-}` / `Cmd-{` | Next / prev group |
+| `Cmd-V` | Paste from clipboard |
+| `Cmd-=` / `Cmd--` | Zoom in / out |
+
+**Setup wizard:** Arrow keys to navigate, `Enter` to drill into directories, `Backspace` to go up, `Tab` to advance step, `Shift-Tab` to go back.
 
 ## Configuration
 
