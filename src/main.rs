@@ -1367,6 +1367,8 @@ struct OpenSquirrel {
     // Stats overlay
     show_stats: bool,
     confirm_remove_agent: Option<usize>,
+    // Viewport estimate (computed each render, used for auto-scroll)
+    visible_lines_estimate: usize,
     // Starfield
     stars: Vec<Star>,
     star_tick: u64,
@@ -1521,6 +1523,7 @@ impl OpenSquirrel {
             sidebar_tab: SidebarTab::Agents,
             show_stats: false,
             confirm_remove_agent: None,
+            visible_lines_estimate: 40,
             stars: generate_stars(200, 0xDEADBEEF42),
             star_tick: 0,
             voice_recording: false,
@@ -1920,7 +1923,8 @@ impl OpenSquirrel {
                             a.output_lines.push(l);
                             if a.auto_scroll {
                                 let len = a.output_lines.len();
-                                if len > 40 { a.scroll_offset = len - 40; }
+                                let vl = view.visible_lines_estimate;
+                                if len > vl { a.scroll_offset = len - vl; }
                             }
                         }
                         AgentMsg::StderrLine(l) => {
@@ -3228,7 +3232,8 @@ impl OpenSquirrel {
         self.clamp_focus();
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             let len = a.output_lines.len();
-            a.scroll_offset = if len > 40 { len - 40 } else { 0 };
+            let vl = self.visible_lines_estimate;
+            a.scroll_offset = if len > vl { len - vl } else { 0 };
         }
         cx.notify();
     }
@@ -3530,7 +3535,8 @@ impl OpenSquirrel {
             a.auto_scroll = !a.auto_scroll;
             if a.auto_scroll {
                 let len = a.output_lines.len();
-                if len > 40 { a.scroll_offset = len - 40; }
+                let vl = self.visible_lines_estimate;
+                if len > vl { a.scroll_offset = len - vl; }
             }
         }
         cx.notify();
@@ -3682,6 +3688,44 @@ impl OpenSquirrel {
     // ── Render ──────────────────────────────────────────────────
 
     fn s(&self, base: f32) -> Pixels { px(base * self.ui_scale) }
+
+    /// Estimate how many transcript lines fit in one agent tile, based on
+    /// the current window height, grid layout, font metrics, and UI scale.
+    fn estimate_visible_lines(&self, window: &Window) -> usize {
+        let window_h: f32 = window.bounds().size.height.into();
+        let scale = self.ui_scale;
+
+        // Subtract top bar (~30px scaled) and grid padding (~6px)
+        let content_h = window_h - 30.0 * scale - 6.0;
+
+        // Determine grid rows from the current view
+        let vis = self.agents_in_current_group();
+        let grid_rows = match self.view_mode {
+            ViewMode::Focus => 1,
+            _ => {
+                let n = vis.len().max(1);
+                match n {
+                    1 => 1,
+                    2 => 1,
+                    3 | 4 => 2,
+                    5 | 6 => 2,
+                    7..=9 => 3,
+                    _ => {
+                        let c = (n as f32).sqrt().ceil() as usize;
+                        (n + c - 1) / c
+                    }
+                }
+            }
+        };
+
+        // Per-tile height (minus row gaps, header ~32px, input bar ~40px, padding ~24px)
+        let tile_h = content_h / grid_rows as f32 - 3.0; // 3px gap between rows
+        let transcript_h = tile_h - (32.0 + 40.0 + 24.0) * scale;
+
+        let line_h = (self.font_size + 8.0) * scale; // matches line_height in render_agent_tile
+        let lines = (transcript_h / line_h).floor() as usize;
+        lines.max(5) // never fewer than 5
+    }
 
     /// Apply background opacity to a color. Used for bg, surface, surface_raised so the desktop shows through.
     fn bg_alpha(&self, c: Rgba) -> Rgba {
@@ -5313,8 +5357,9 @@ impl OpenSquirrel {
 }
 
 impl Render for OpenSquirrel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.clamp_focus();
+        self.visible_lines_estimate = self.estimate_visible_lines(window);
 
         let top_bar = self.render_top_bar(cx);
         let sidebar = self.render_sidebar(cx);
