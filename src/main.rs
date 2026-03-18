@@ -1367,6 +1367,8 @@ struct OpenSquirrel {
     // Stats overlay
     show_stats: bool,
     confirm_remove_agent: Option<usize>,
+    // Viewport estimate (computed each render, used for auto-scroll)
+    visible_lines_estimate: usize,
     // Starfield
     stars: Vec<Star>,
     star_tick: u64,
@@ -1460,6 +1462,27 @@ impl OpenSquirrel {
         self.save_state();
     }
 
+    fn remove_group(&mut self, gi: usize) {
+        if self.groups.len() <= 1 || gi >= self.groups.len() { return; }
+        let removed_name = self.groups[gi].name.clone();
+        let fallback = self.groups.iter()
+            .find(|g| g.name != removed_name)
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| "default".into());
+        for agent in &mut self.agents {
+            if agent.group == removed_name {
+                agent.group = fallback.clone();
+            }
+        }
+        self.groups.remove(gi);
+        if self.focused_group >= self.groups.len() {
+            self.focused_group = self.groups.len().saturating_sub(1);
+        }
+        self.clamp_focus();
+        self.save_config();
+        self.save_state();
+    }
+
     fn truncate_for_summary(text: &str, max_len: usize) -> String {
         if text.len() <= max_len {
             text.to_string()
@@ -1521,6 +1544,7 @@ impl OpenSquirrel {
             sidebar_tab: SidebarTab::Agents,
             show_stats: false,
             confirm_remove_agent: None,
+            visible_lines_estimate: 40,
             stars: generate_stars(200, 0xDEADBEEF42),
             star_tick: 0,
             voice_recording: false,
@@ -1920,7 +1944,8 @@ impl OpenSquirrel {
                             a.output_lines.push(l);
                             if a.auto_scroll {
                                 let len = a.output_lines.len();
-                                if len > 40 { a.scroll_offset = len - 40; }
+                                let vl = view.visible_lines_estimate;
+                                if len > vl { a.scroll_offset = len - vl; }
                             }
                         }
                         AgentMsg::StderrLine(l) => {
@@ -3228,7 +3253,8 @@ impl OpenSquirrel {
         self.clamp_focus();
         if let Some(a) = self.agents.get_mut(self.focused_agent) {
             let len = a.output_lines.len();
-            a.scroll_offset = if len > 40 { len - 40 } else { 0 };
+            let vl = self.visible_lines_estimate;
+            a.scroll_offset = if len > vl { len - vl } else { 0 };
         }
         cx.notify();
     }
@@ -3530,7 +3556,8 @@ impl OpenSquirrel {
             a.auto_scroll = !a.auto_scroll;
             if a.auto_scroll {
                 let len = a.output_lines.len();
-                if len > 40 { a.scroll_offset = len - 40; }
+                let vl = self.visible_lines_estimate;
+                if len > vl { a.scroll_offset = len - vl; }
             }
         }
         cx.notify();
@@ -3683,6 +3710,44 @@ impl OpenSquirrel {
 
     fn s(&self, base: f32) -> Pixels { px(base * self.ui_scale) }
 
+    /// Estimate how many transcript lines fit in one agent tile, based on
+    /// the current window height, grid layout, font metrics, and UI scale.
+    fn estimate_visible_lines(&self, window: &Window) -> usize {
+        let window_h: f32 = window.bounds().size.height.into();
+        let scale = self.ui_scale;
+
+        // Subtract top bar (~30px scaled) and grid padding (~6px)
+        let content_h = window_h - 30.0 * scale - 6.0;
+
+        // Determine grid rows from the current view
+        let vis = self.agents_in_current_group();
+        let grid_rows = match self.view_mode {
+            ViewMode::Focus => 1,
+            _ => {
+                let n = vis.len().max(1);
+                match n {
+                    1 => 1,
+                    2 => 1,
+                    3 | 4 => 2,
+                    5 | 6 => 2,
+                    7..=9 => 3,
+                    _ => {
+                        let c = (n as f32).sqrt().ceil() as usize;
+                        (n + c - 1) / c
+                    }
+                }
+            }
+        };
+
+        // Per-tile height (minus row gaps, header ~32px, input bar ~40px, padding ~24px)
+        let tile_h = content_h / grid_rows as f32 - 3.0; // 3px gap between rows
+        let transcript_h = tile_h - (32.0 + 40.0 + 24.0) * scale;
+
+        let line_h = (self.font_size + 8.0) * scale; // matches line_height in render_agent_tile
+        let lines = (transcript_h / line_h).floor() as usize;
+        lines.max(5) // never fewer than 5
+    }
+
     /// Apply background opacity to a color. Used for bg, surface, surface_raised so the desktop shows through.
     fn bg_alpha(&self, c: Rgba) -> Rgba {
         let o = self.config.bg_opacity;
@@ -3738,24 +3803,40 @@ impl OpenSquirrel {
                     let focused = gi == self.focused_group;
                     let bg = if focused { surface_raised } else { rgba(0x00000000) };
                     let tc = if focused { t.text() } else { t.text_muted() };
+                    let can_delete_group = self.groups.len() > 1;
 
-                    sb = sb.child(
-                        div().id(ElementId::Name(format!("grp-{}", gi).into()))
-                            .w_full().px(self.s(8.0)).py(self.s(5.0)).rounded(self.s(6.0)).bg(bg)
-                            .cursor_pointer()
-                            .flex().items_center().gap(self.s(8.0))
-                            .child(div().text_size(self.s(11.0)).text_color(if focused { t.blue() } else { t.text_faint() }).child(if focused { ">" } else { " " }))
-                            .child(div().text_size(self.s(13.0)).text_color(tc).child(group.name.clone()))
-                            .child(div().flex_grow())
-                            .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(
-                                format!("{}", self.agents.iter().filter(|a| a.group == group.name).count())
-                            ))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.focused_group = gi;
-                                this.clamp_focus();
-                                cx.notify();
-                            })),
-                    );
+                    let mut group_row = div().id(ElementId::Name(format!("grp-{}", gi).into()))
+                        .w_full().px(self.s(8.0)).py(self.s(5.0)).rounded(self.s(6.0)).bg(bg)
+                        .cursor_pointer()
+                        .flex().items_center().gap(self.s(8.0))
+                        .child(div().text_size(self.s(11.0)).text_color(if focused { t.blue() } else { t.text_faint() }).child(if focused { ">" } else { " " }))
+                        .child(div().text_size(self.s(13.0)).text_color(tc).child(group.name.clone()))
+                        .child(div().flex_grow())
+                        .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(
+                            format!("{}", self.agents.iter().filter(|a| a.group == group.name).count())
+                        ))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.focused_group = gi;
+                            this.clamp_focus();
+                            cx.notify();
+                        }));
+
+                    if can_delete_group {
+                        group_row = group_row.child(
+                            div().id(ElementId::Name(format!("del-grp-{}", gi).into()))
+                                .px(self.s(4.0)).rounded(self.s(4.0))
+                                .cursor_pointer()
+                                .text_size(self.s(11.0)).text_color(t.text_faint())
+                                .hover(|s| s.text_color(t.red()))
+                                .child("×")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.remove_group(gi);
+                                    cx.notify();
+                                }))
+                        );
+                    }
+
+                    sb = sb.child(group_row);
 
                     if focused {
                         for (i, agent) in self.agents.iter().enumerate() {
@@ -3774,6 +3855,18 @@ impl OpenSquirrel {
                                     .child(div().text_size(self.s(12.0)).text_color(tc).child(format!("{}{}{}", role_icon, fav_icon, agent.name)))
                                     .child(div().flex_grow())
                                     .child(div().text_size(self.s(10.0)).text_color(t.text_faint()).child(format!("{}@{}", agent.runtime_name, agent.target_machine)))
+                                    .child(
+                                        div().id(ElementId::Name(format!("del-sa-{}", i).into()))
+                                            .px(self.s(4.0)).rounded(self.s(4.0))
+                                            .cursor_pointer()
+                                            .text_size(self.s(11.0)).text_color(t.text_faint())
+                                            .hover(|s| s.text_color(t.red()))
+                                            .child("×")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.confirm_remove_agent = Some(i);
+                                                cx.notify();
+                                            }))
+                                    )
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.set_focus(i);
                                         cx.notify();
@@ -4263,6 +4356,7 @@ impl OpenSquirrel {
                 div().id(ElementId::Name(format!("empty-click-{}", idx).into()))
                     .flex_grow().w_full().cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.mode == Mode::Setup || this.mode == Mode::Palette { return; }
                         this.set_focus(idx);
                         this.set_mode(Mode::Normal);
                         cx.notify();
@@ -4630,12 +4724,23 @@ impl OpenSquirrel {
         ];
         let mut step_row = div().w_full().px(self.s(14.0)).py(self.s(10.0)).border_b_1().border_color(t.palette_border())
             .flex().items_center().gap(self.s(16.0));
-        for (label, step) in &steps {
+        for (si, (label, step)) in steps.iter().enumerate() {
             let active = setup.step == *step;
             let c = if active { t.blue() } else { t.text_faint() };
-            step_row = step_row.child(div().text_size(self.s(12.0)).text_color(c).child(
-                if active { format!("> {}", label) } else { label.to_string() }
-            ));
+            let target_step = *step;
+            step_row = step_row.child(
+                div().id(ElementId::Name(format!("setup-tab-{}", si).into()))
+                    .cursor_pointer()
+                    .text_size(self.s(12.0)).text_color(c)
+                    .hover(|s| s.text_color(t.blue()))
+                    .child(if active { format!("> {}", label) } else { label.to_string() })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut s) = this.setup {
+                            s.step = target_step;
+                        }
+                        cx.notify();
+                    }))
+            );
         }
         w = w.child(step_row);
 
@@ -4658,9 +4763,12 @@ impl OpenSquirrel {
                                 .child(rt.name.clone()))
                             .child(div().flex_grow())
                             .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(rt.description.clone()))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                                 if let Some(ref mut s) = this.setup {
                                     s.runtime_cursor = i;
+                                }
+                                if event.click_count() == 2 {
+                                    this.setup_next(&SetupNext, window, cx);
                                 }
                                 cx.notify();
                             })),
@@ -4784,9 +4892,12 @@ impl OpenSquirrel {
                                     .child(model.label.clone()))
                                 .child(div().flex_grow())
                                 .child(div().text_size(self.s(9.0)).text_color(t.text_faint()).child(format!("{}{}", model.id, free_tag)))
-                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                                     if let Some(ref mut s) = this.setup {
                                         s.model_cursor = list_idx;
+                                    }
+                                    if event.click_count() == 2 {
+                                        this.setup_next(&SetupNext, window, cx);
                                     }
                                     cx.notify();
                                 })),
@@ -4811,7 +4922,8 @@ impl OpenSquirrel {
                         "local".to_string()
                     };
                     w = w.child(
-                        div().w_full().px(self.s(14.0)).py(self.s(6.0))
+                        div().id(ElementId::Name(format!("smach-{}", i).into()))
+                            .w_full().px(self.s(14.0)).py(self.s(6.0))
                             .cursor_pointer()
                             .bg(if sel { t.selected_row() } else { rgba(0x00000000) })
                             .flex().items_center().gap(self.s(10.0))
@@ -4820,7 +4932,16 @@ impl OpenSquirrel {
                             .child(div().text_size(self.s(13.0)).text_color(if sel { t.text() } else { t.text_muted() })
                                 .child(machine.name.clone()))
                             .child(div().flex_grow())
-                            .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(detail)),
+                            .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(detail))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                if let Some(ref mut s) = this.setup {
+                                    s.machine_cursor = i;
+                                }
+                                if event.click_count() == 2 {
+                                    this.setup_next(&SetupNext, window, cx);
+                                }
+                                cx.notify();
+                            })),
                     );
                 }
             }
@@ -4868,14 +4989,25 @@ impl OpenSquirrel {
                         format!("~{}", &dir[home.len()..])
                     } else { dir.clone() };
                     w = w.child(
-                        div().w_full().px(self.s(14.0)).py(self.s(4.0))
+                        div().id(ElementId::Name(format!("sdir-{}", list_idx).into()))
+                            .w_full().px(self.s(14.0)).py(self.s(4.0))
+                            .cursor_pointer()
                             .bg(if sel { t.selected_row() } else { rgba(0x00000000) })
                             .flex().items_center().gap(self.s(10.0)).overflow_hidden()
                             .child(div().text_size(self.s(12.0)).text_color(if sel { t.blue() } else { t.text_faint() })
                                 .child(if sel { ">" } else { " " }))
                             .child(div().flex_shrink().min_w(px(0.)).text_size(self.s(12.0))
                                 .text_color(if sel { t.text() } else { t.text_muted() })
-                                .child(display)),
+                                .child(display))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                if let Some(ref mut s) = this.setup {
+                                    s.dir_cursor = list_idx;
+                                }
+                                if event.click_count() == 2 {
+                                    this.setup_next(&SetupNext, window, cx);
+                                }
+                                cx.notify();
+                            })),
                     );
                 }
                 if filtered.len() > visible_count {
@@ -4892,7 +5024,9 @@ impl OpenSquirrel {
                     let checkbox = if checked { "[x]" } else { "[ ]" };
                     let locked = mcp.global;
                     w = w.child(
-                        div().w_full().px(self.s(14.0)).py(self.s(6.0))
+                        div().id(ElementId::Name(format!("smcp-{}", i).into()))
+                            .w_full().px(self.s(14.0)).py(self.s(6.0))
+                            .cursor_pointer()
                             .bg(if cursor { t.selected_row() } else { rgba(0x00000000) })
                             .flex().items_center().gap(self.s(10.0))
                             .child(div().text_size(self.s(13.0)).text_color(
@@ -4904,7 +5038,24 @@ impl OpenSquirrel {
                             .child(div().flex_grow())
                             .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(
                                 if locked { format!("{} (global)", mcp.description) } else { mcp.description.clone() }
-                            )),
+                            ))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                if let Some(ref mut s) = this.setup {
+                                    s.mcp_cursor = i;
+                                    // Toggle the MCP on single click (unless it's global/locked)
+                                    if event.click_count() == 1 {
+                                        if !this.config.mcps.get(i).map(|m| m.global).unwrap_or(false) {
+                                            if let Some(v) = s.selected_mcps.get_mut(i) {
+                                                *v = !*v;
+                                            }
+                                        }
+                                    }
+                                }
+                                if event.click_count() == 2 {
+                                    this.setup_next(&SetupNext, window, cx);
+                                }
+                                cx.notify();
+                            })),
                     );
                 }
             }
@@ -5313,8 +5464,9 @@ impl OpenSquirrel {
 }
 
 impl Render for OpenSquirrel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.clamp_focus();
+        self.visible_lines_estimate = self.estimate_visible_lines(window);
 
         let top_bar = self.render_top_bar(cx);
         let sidebar = self.render_sidebar(cx);
