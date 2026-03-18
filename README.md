@@ -12,7 +12,7 @@ Run Claude Code, Codex, Cursor, and OpenCode side by side with automatic sub-age
 
 - **Multi-agent grid** — Run multiple agents simultaneously in a responsive tiled layout. Agents auto-arrange based on count (1=full, 2=split, 4=2×2, etc).
 - **Coordinator/worker delegation** — A primary agent (Opus) can automatically spawn sub-agents for focused tasks. Workers return condensed results, not full transcripts.
-- **Remote machine targeting** — Agents can target local or remote machines via SSH + tmux. Configure machines in `~/.opensquirrel/config.toml`.
+- **Remote machine targeting** — Agents can target local or remote machines via SSH + tmux. Configure machines in `~/.osq/config.toml`.
 - **MCP integration** — MCP servers (Playwright, browser-use, etc.) are wired directly to agent CLI args. Select per-agent during setup.
 - **Persistent sessions** — Agent state, transcripts, scroll positions, and pending prompts survive app restarts. Interrupted turns can be resumed.
 - **Structured output parsing** — Parses `stream-json` output from all runtimes. Custom markdown rendering with code blocks, diffs, headings, bullets.
@@ -72,9 +72,9 @@ No vim modes — text input is always active. All actions use standard Cmd- keyb
 
 ## Configuration
 
-Config lives at `~/.opensquirrel/config.toml`. Defines runtimes, models, MCP servers, machines, themes, and settings.
+Config lives at `~/.osq/config.toml`. Defines runtimes, models, MCP servers, machines, themes, and settings.
 
-State is persisted at `~/.opensquirrel/state.json` (agents, transcripts, scroll positions).
+State is persisted at `~/.osq/state.json` (agents, transcripts, scroll positions).
 
 ## Architecture
 

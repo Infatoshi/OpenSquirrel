@@ -21,15 +21,15 @@ Written in Rust. Built on GPUI. No Electron. No web tech. Keyboard-first.
 - Workers can target local or remote (SSH + tmux) machines
 
 ### Machine Targets
-- Configured in `~/.opensquirrel/config.toml` under `[[machines]]`
+- Configured in `~/.osq/config.toml` under `[[machines]]`
 - Default: `local` and `theodolos` (SSH)
 - Remote workers launch inside named tmux sessions on the target machine
 - Remote session names and line cursors are persisted for reattach on app restart
 - Machine selection is available in the setup wizard and in delegated task JSON
 
 ### Persistence
-- Config: `~/.opensquirrel/config.toml` (runtimes, machines, MCPs, theme, font, settings)
-- State: `~/.opensquirrel/state.json` (agents, transcripts, scroll positions, worker assignments, pending prompts, turn state, remote session info)
+- Config: `~/.osq/config.toml` (runtimes, machines, MCPs, theme, font, settings)
+- State: `~/.osq/state.json` (agents, transcripts, scroll positions, worker assignments, pending prompts, turn state, remote session info)
 - Turn-boundary journaling: pending prompts and turn state are saved so interrupted turns can be resumed
 - Restored agents show a banner (not injected into transcript history)
 
@@ -74,7 +74,7 @@ Written in Rust. Built on GPUI. No Electron. No web tech. Keyboard-first.
 - whisper.cpp via `whisper-rs` crate with Metal GPU acceleration
 - `cpal` for audio capture at device native sample rate
 - Resamples to 16kHz before inference
-- Model files expected at `~/.opensquirrel/models/ggml-{name}.bin`
+- Model files expected at `~/.osq/models/ggml-{name}.bin`
 - Toggle with backtick key, shows red REC indicator while recording
 
 ### Themes
@@ -115,7 +115,114 @@ midnight, charcoal, gruvbox, solarized-dark, light, solarized-light, ops, monoka
 - Code editor (agents edit code, not the user)
 - File tree browser
 - LSP integration
-- Git UI
 - Plugin/extension system
 - Collaboration/team features
 - Approval queue (removed — not part of the workflow)
+
+---
+
+## Remote Daemon (osqd)
+
+### Problem
+
+When you select a remote machine (e.g. Theodolos) in the setup wizard, it shows local directories and has no way to browse remote filesystems, spawn agents remotely with persistence, or survive laptop sleep. The current tmux-based approach breaks after extended disconnects.
+
+### Architecture
+
+The daemon (`osqd`) is the same OpenSquirrel binary run with `--daemon` flag. It runs headless on remote Linux machines and provides:
+
+1. **Agent lifecycle management** -- spawn, monitor, kill agent subprocesses (claude, codex, gemini, etc.) that persist independently of the SSH connection
+2. **Filesystem access** -- directory listings, file reads, git status for the remote machine so the setup wizard shows remote paths
+3. **GPU/system info** -- report GPU utilization, VRAM, running processes for machine selection
+
+### Transport
+
+**SSH tunnel + TCP** (JSON-lines protocol over localhost):
+- Daemon listens on `127.0.0.1:{port}` only (never exposed externally)
+- Local app opens SSH port forward: `ssh -L {local_port}:127.0.0.1:{remote_port} {host}`
+- Communication is JSON-lines over the forwarded TCP socket
+- Works through any network, uses existing SSH keys, zero extra attack surface
+- Connection drops cleanly on laptop sleep; local app reconnects automatically
+
+### Persistence Model
+
+- Agents continue running on the remote machine when the local app disconnects (laptop sleep, network drop, app quit)
+- On reconnect, local app receives buffered output that accumulated while disconnected
+- Agent state is persisted to `~/.osq/state.json` on the remote machine
+- The daemon process itself is a long-running background process (not tied to any terminal)
+
+### UI Integration
+
+- Remote agents appear in the same mixed grid as local agents
+- Machine name shown in tile header (already exists)
+- No separate views per machine
+- Setup wizard shows remote directories when a remote machine is selected (daemon serves `list_dirs` request)
+
+### Protocol (JSON-lines over TCP)
+
+```
+// Client -> Daemon
+{"cmd": "list_dirs", "path": "/home/user"}
+{"cmd": "spawn_agent", "runtime": "claude", "model": "opus-4.6", "workdir": "/home/user/project", "prompt": "..."}
+{"cmd": "kill_agent", "agent_id": "agent-0"}
+{"cmd": "send_prompt", "agent_id": "agent-0", "prompt": "..."}
+{"cmd": "list_agents"}
+{"cmd": "gpu_info"}
+{"cmd": "ping"}
+
+// Daemon -> Client
+{"event": "agent_output", "agent_id": "agent-0", "line": "..."}
+{"event": "agent_status", "agent_id": "agent-0", "status": "working"}
+{"event": "agent_done", "agent_id": "agent-0", "session_id": "..."}
+{"event": "dirs", "entries": ["/home/user/projects", "/home/user/repos"]}
+{"event": "gpu", "gpus": [{"name": "RTX 3090", "util": 45, "vram_used": 8192, "vram_total": 24576}]}
+{"event": "pong", "version": "0.1.0", "uptime_secs": 3600}
+```
+
+### Deployment
+
+- First use: clone repo to `~/.osq/repo/` on remote, `cargo build --release`, symlink to `~/.osq/bin/osqd`
+- Updates: `git pull && cargo build --release` triggered by local app when version mismatch detected
+- Daemon starts as background process: `nohup ~/.osq/bin/osqd &`
+- PID file at `~/.osq/osqd.pid` for lifecycle management
+- Auto-start: local app runs `ssh {host} '~/.osq/bin/osqd --ensure'` which starts the daemon if not running
+
+### Remote Directory Structure (~/.osq/ on remote)
+
+```
+~/.osq/
+  config.toml          # daemon config (port, log level)
+  state.json           # persisted agent state
+  osqd.pid             # daemon PID
+  osqd.log             # daemon log (rotated)
+  bin/
+    osqd -> ../repo/target/release/opensquirrel
+  repo/                # git clone of OpenSquirrel (for building)
+    ...
+  worktrees/           # git worktrees for isolated agents
+    feature-branch/
+```
+
+### Daemon Lifecycle
+
+1. **First connection to a new machine**: local app SSHs in, checks for `~/.osq/bin/osqd`. If missing, clones repo and builds.
+2. **Subsequent connections**: local app SSHs in, runs `osqd --ensure` (no-op if already running, starts if not).
+3. **Version mismatch**: daemon responds to `ping` with its version. If local app version differs, it triggers `git pull && cargo build --release && osqd --restart`.
+4. **Daemon crash recovery**: on next connection, `--ensure` detects stale PID file and restarts.
+
+### Implementation Plan
+
+1. `src/daemon.rs` -- daemon mode entry point, TCP listener, JSON protocol handler
+2. `src/daemon_client.rs` -- client-side connection manager, SSH tunnel setup, reconnection logic
+3. Modify `create_agent_with_role` -- for remote machines, send `spawn_agent` to daemon instead of local subprocess
+4. Modify setup wizard -- for remote machines, send `list_dirs` to daemon instead of local `list_subdirs()`
+5. Add `--daemon` and `--ensure` CLI flags to main.rs
+6. Add GPU info collection (parse `nvidia-smi` output)
+
+### TODO (plan more thoroughly)
+- [ ] Exact version negotiation protocol
+- [ ] GitHub-based update notifications (check latest release tag)
+- [ ] Graceful daemon shutdown and agent cleanup
+- [ ] Log rotation and disk space management
+- [ ] Multi-user support (multiple local apps connecting to same daemon)
+- [ ] Authentication/authorization for daemon connections

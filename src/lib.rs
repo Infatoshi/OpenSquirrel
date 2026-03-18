@@ -16,15 +16,36 @@ pub enum LineKind {
 }
 
 pub fn classify_line(line: &str) -> LineKind {
-    if line.starts_with("> ") { return LineKind::UserInput; }
-    if line.starts_with("[!]") || line.starts_with("[APPROVE?]") { return LineKind::Error; }
-    if line.starts_with("[think]") { return LineKind::Thinking; }
-    if line.starts_with("[approved]") || line.starts_with("[rejected]") || line.starts_with("[killed]") { return LineKind::System; }
-    if line.starts_with("+++") || line.starts_with("---") { return LineKind::DiffMeta; }
-    if line.starts_with('+') && !line.starts_with("++") { return LineKind::DiffAdd; }
-    if line.starts_with('-') && !line.starts_with("--") { return LineKind::DiffRemove; }
-    if line.starts_with("@@") { return LineKind::DiffHunk; }
-    if line.starts_with("diff ") { return LineKind::DiffMeta; }
+    if line.starts_with("> ") {
+        return LineKind::UserInput;
+    }
+    if line.starts_with("[!]") || line.starts_with("[APPROVE?]") {
+        return LineKind::Error;
+    }
+    if line.starts_with("[think]") {
+        return LineKind::Thinking;
+    }
+    if line.starts_with("[approved]")
+        || line.starts_with("[rejected]")
+        || line.starts_with("[killed]")
+    {
+        return LineKind::System;
+    }
+    if line.starts_with("+++") || line.starts_with("---") {
+        return LineKind::DiffMeta;
+    }
+    if line.starts_with('+') && !line.starts_with("++") {
+        return LineKind::DiffAdd;
+    }
+    if line.starts_with('-') && !line.starts_with("--") {
+        return LineKind::DiffRemove;
+    }
+    if line.starts_with("@@") {
+        return LineKind::DiffHunk;
+    }
+    if line.starts_with("diff ") {
+        return LineKind::DiffMeta;
+    }
     LineKind::Normal
 }
 
@@ -57,64 +78,107 @@ pub fn parse_spans(line: &str) -> Vec<Span> {
     while i < len {
         // Inline code: `...`
         if chars[i] == '`' && !peek_is(&chars, i, "```") {
-            if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
-            i += 1;
-            let mut code = String::new();
-            while i < len && chars[i] != '`' {
-                code.push(chars[i]);
+            if let Some(close) = chars[i + 1..].iter().position(|&c| c == '`') {
+                if !buf.is_empty() {
+                    spans.push(Span::Text(buf.clone()));
+                    buf.clear();
+                }
                 i += 1;
-            }
-            if i < len { i += 1; } // skip closing `
-            if !code.is_empty() {
-                spans.push(Span::Code(code));
+                let code: String = chars[i..i + close].iter().collect();
+                i += close + 1;
+                if !code.is_empty() {
+                    spans.push(Span::Code(code));
+                }
+            } else {
+                buf.push('`');
+                i += 1;
             }
             continue;
         }
 
         // Bold italic: ***...***
         if peek_is(&chars, i, "***") {
-            if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
-            i += 3;
-            let mut inner = String::new();
-            while i < len && !peek_is(&chars, i, "***") {
-                inner.push(chars[i]);
-                i += 1;
+            let start = i + 3;
+            let mut close = None;
+            let mut j = start;
+            while j < len {
+                if peek_is(&chars, j, "***") {
+                    close = Some(j);
+                    break;
+                }
+                j += 1;
             }
-            if peek_is(&chars, i, "***") { i += 3; }
-            if !inner.is_empty() {
-                spans.push(Span::BoldItalic(inner));
+            if let Some(end) = close {
+                if !buf.is_empty() {
+                    spans.push(Span::Text(buf.clone()));
+                    buf.clear();
+                }
+                let inner: String = chars[start..end].iter().collect();
+                i = end + 3;
+                if !inner.is_empty() {
+                    spans.push(Span::BoldItalic(inner));
+                }
+            } else {
+                buf.push_str("***");
+                i += 3;
             }
             continue;
         }
 
         // Bold: **...**
         if peek_is(&chars, i, "**") && !peek_is(&chars, i, "***") {
-            if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
-            i += 2;
-            let mut inner = String::new();
-            while i < len && !peek_is(&chars, i, "**") {
-                inner.push(chars[i]);
-                i += 1;
+            let start = i + 2;
+            let mut close = None;
+            let mut j = start;
+            while j < len {
+                if peek_is(&chars, j, "**") {
+                    close = Some(j);
+                    break;
+                }
+                j += 1;
             }
-            if peek_is(&chars, i, "**") { i += 2; }
-            if !inner.is_empty() {
-                spans.push(Span::Bold(inner));
+            if let Some(end) = close {
+                if !buf.is_empty() {
+                    spans.push(Span::Text(buf.clone()));
+                    buf.clear();
+                }
+                let inner: String = chars[start..end].iter().collect();
+                i = end + 2;
+                if !inner.is_empty() {
+                    spans.push(Span::Bold(inner));
+                }
+            } else {
+                buf.push_str("**");
+                i += 2;
             }
             continue;
         }
 
         // Italic: *...*  (single * not followed by another *)
         if chars[i] == '*' && !peek_is(&chars, i, "**") {
-            if !buf.is_empty() { spans.push(Span::Text(buf.clone())); buf.clear(); }
-            i += 1;
-            let mut inner = String::new();
-            while i < len && !(chars[i] == '*' && !peek_is(&chars, i, "**")) {
-                inner.push(chars[i]);
-                i += 1;
+            let start = i + 1;
+            let mut close = None;
+            let mut j = start;
+            while j < len {
+                if chars[j] == '*' && !peek_is(&chars, j, "**") {
+                    close = Some(j);
+                    break;
+                }
+                j += 1;
             }
-            if i < len && chars[i] == '*' { i += 1; }
-            if !inner.is_empty() {
-                spans.push(Span::Italic(inner));
+            if let Some(end) = close {
+                if !buf.is_empty() {
+                    spans.push(Span::Text(buf.clone()));
+                    buf.clear();
+                }
+                let inner: String = chars[start..end].iter().collect();
+                i = end + 1;
+                if !inner.is_empty() {
+                    spans.push(Span::Italic(inner));
+                }
+            } else {
+                buf.push('*');
+                i += 1;
             }
             continue;
         }
@@ -123,16 +187,24 @@ pub fn parse_spans(line: &str) -> Vec<Span> {
         i += 1;
     }
 
-    if !buf.is_empty() { spans.push(Span::Text(buf)); }
-    if spans.is_empty() { spans.push(Span::Text(String::new())); }
+    if !buf.is_empty() {
+        spans.push(Span::Text(buf));
+    }
+    if spans.is_empty() {
+        spans.push(Span::Text(String::new()));
+    }
     spans
 }
 
 fn peek_is(chars: &[char], i: usize, s: &str) -> bool {
     let sc: Vec<char> = s.chars().collect();
-    if i + sc.len() > chars.len() { return false; }
+    if i + sc.len() > chars.len() {
+        return false;
+    }
     for (j, c) in sc.iter().enumerate() {
-        if chars[i + j] != *c { return false; }
+        if chars[i + j] != *c {
+            return false;
+        }
     }
     true
 }
@@ -180,11 +252,17 @@ pub fn parse_bullet(line: &str) -> Option<(usize, &str)> {
 /// Returns Some(level, content) where level is 1-6.
 pub fn parse_heading(line: &str) -> Option<(usize, &str)> {
     let trimmed = line.trim_start();
-    if !trimmed.starts_with('#') { return None; }
+    if !trimmed.starts_with('#') {
+        return None;
+    }
     let level = trimmed.chars().take_while(|&c| c == '#').count();
-    if level > 6 { return None; }
+    if level > 6 {
+        return None;
+    }
     let rest = trimmed[level..].trim_start();
-    if rest.is_empty() && level == trimmed.len() { return None; }
+    if rest.is_empty() && level == trimmed.len() {
+        return None;
+    }
     Some((level, rest))
 }
 
@@ -254,7 +332,8 @@ pub struct DiffSummary {
 }
 
 pub fn extract_latest_turn_output(lines: &[String]) -> String {
-    let start = lines.iter()
+    let start = lines
+        .iter()
         .rposition(|line| line.starts_with("> "))
         .map(|idx| idx + 1)
         .unwrap_or(0);
@@ -281,14 +360,21 @@ pub fn summarize_diff(lines: &[String]) -> DiffSummary {
             _ => {}
         }
 
-        if let Some(path) = line.strip_prefix("+++ b/").or_else(|| line.strip_prefix("--- a/")) {
+        if let Some(path) = line
+            .strip_prefix("+++ b/")
+            .or_else(|| line.strip_prefix("--- a/"))
+        {
             if !path.is_empty() && !files.iter().any(|existing| existing == path) {
                 files.push(path.to_string());
             }
         }
     }
 
-    DiffSummary { files, additions, removals }
+    DiffSummary {
+        files,
+        additions,
+        removals,
+    }
 }
 
 pub fn shell_escape(arg: &str) -> String {
@@ -305,14 +391,21 @@ mod tests {
 
     #[test]
     fn test_parse_spans_plain() {
-        assert_eq!(parse_spans("hello world"), vec![Span::Text("hello world".into())]);
+        assert_eq!(
+            parse_spans("hello world"),
+            vec![Span::Text("hello world".into())]
+        );
     }
 
     #[test]
     fn test_parse_spans_inline_code() {
         assert_eq!(
             parse_spans("use `foo` here"),
-            vec![Span::Text("use ".into()), Span::Code("foo".into()), Span::Text(" here".into())]
+            vec![
+                Span::Text("use ".into()),
+                Span::Code("foo".into()),
+                Span::Text(" here".into())
+            ]
         );
     }
 
@@ -320,7 +413,11 @@ mod tests {
     fn test_parse_spans_bold() {
         assert_eq!(
             parse_spans("this is **bold** text"),
-            vec![Span::Text("this is ".into()), Span::Bold("bold".into()), Span::Text(" text".into())]
+            vec![
+                Span::Text("this is ".into()),
+                Span::Bold("bold".into()),
+                Span::Text(" text".into())
+            ]
         );
     }
 
@@ -328,7 +425,11 @@ mod tests {
     fn test_parse_spans_italic() {
         assert_eq!(
             parse_spans("this is *italic* text"),
-            vec![Span::Text("this is ".into()), Span::Italic("italic".into()), Span::Text(" text".into())]
+            vec![
+                Span::Text("this is ".into()),
+                Span::Italic("italic".into()),
+                Span::Text(" text".into())
+            ]
         );
     }
 
@@ -336,21 +437,28 @@ mod tests {
     fn test_parse_spans_bold_italic() {
         assert_eq!(
             parse_spans("this is ***both*** text"),
-            vec![Span::Text("this is ".into()), Span::BoldItalic("both".into()), Span::Text(" text".into())]
+            vec![
+                Span::Text("this is ".into()),
+                Span::BoldItalic("both".into()),
+                Span::Text(" text".into())
+            ]
         );
     }
 
     #[test]
     fn test_parse_spans_mixed() {
         let spans = parse_spans("run `cargo build` and **check** the *output*");
-        assert_eq!(spans, vec![
-            Span::Text("run ".into()),
-            Span::Code("cargo build".into()),
-            Span::Text(" and ".into()),
-            Span::Bold("check".into()),
-            Span::Text(" the ".into()),
-            Span::Italic("output".into()),
-        ]);
+        assert_eq!(
+            spans,
+            vec![
+                Span::Text("run ".into()),
+                Span::Code("cargo build".into()),
+                Span::Text(" and ".into()),
+                Span::Bold("check".into()),
+                Span::Text(" the ".into()),
+                Span::Italic("output".into()),
+            ]
+        );
     }
 
     #[test]
@@ -500,5 +608,58 @@ mod tests {
         assert_eq!(shell_escape("hello"), "'hello'");
         assert_eq!(shell_escape("it'a"), "'it'\"'\"'a'");
         assert_eq!(shell_escape(""), "''");
+    }
+
+    #[test]
+    fn test_unclosed_backtick() {
+        assert_eq!(
+            parse_spans("hello `world"),
+            vec![Span::Text("hello `world".into())]
+        );
+    }
+
+    #[test]
+    fn test_unclosed_backtick_at_end() {
+        assert_eq!(parse_spans("hello `"), vec![Span::Text("hello `".into())]);
+    }
+
+    #[test]
+    fn test_unclosed_bold() {
+        assert_eq!(
+            parse_spans("hello **world"),
+            vec![Span::Text("hello **world".into())]
+        );
+    }
+
+    #[test]
+    fn test_unclosed_italic() {
+        assert_eq!(
+            parse_spans("hello *world"),
+            vec![Span::Text("hello *world".into())]
+        );
+    }
+
+    #[test]
+    fn test_unclosed_bold_italic() {
+        assert_eq!(
+            parse_spans("hello ***world"),
+            vec![Span::Text("hello ***world".into())]
+        );
+    }
+
+    #[test]
+    fn test_unclosed_backtick_with_closed_after() {
+        assert_eq!(
+            parse_spans("`ok` then `broken"),
+            vec![Span::Code("ok".into()), Span::Text(" then `broken".into())]
+        );
+    }
+
+    #[test]
+    fn test_unclosed_bold_with_closed_after() {
+        assert_eq!(
+            parse_spans("**ok** then **broken"),
+            vec![Span::Bold("ok".into()), Span::Text(" then **broken".into())]
+        );
     }
 }

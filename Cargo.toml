@@ -6,11 +6,13 @@ description = "GPU-rendered, keyboard-driven agent tiling manager"
 license = "MIT"
 
 [dependencies]
-gpui = "0.2"
+gpui = { version = "0.2", features = ["runtime_shaders"] }
 async-channel = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 anyhow = "1.0.102"
-whisper-rs = { version = "0.15", features = ["metal"] }
-cpal = "0.17"
+gpui-terminal = "0.1"
+portable-pty = "0.9"
+ctrlc = "3"
+libc = "0.2"

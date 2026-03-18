@@ -1,7 +1,6 @@
+use opensquirrel::{LineKind, classify_line};
 /// Tests for OpenSquirrel state management logic.
-
 use std::process::Command;
-use opensquirrel::{classify_line, LineKind};
 
 #[test]
 fn binary_builds() {
@@ -17,11 +16,16 @@ fn binary_builds() {
 fn focus_clamping_with_groups() {
     // Simulate: 5 agents, only 3 in the active group
     let agents: Vec<(&str, &str)> = vec![
-        ("a-0", "default"), ("a-1", "default"), ("a-2", "cuda"),
-        ("a-3", "default"), ("a-4", "cuda"),
+        ("a-0", "default"),
+        ("a-1", "default"),
+        ("a-2", "cuda"),
+        ("a-3", "default"),
+        ("a-4", "cuda"),
     ];
     let group = "default";
-    let visible: Vec<usize> = agents.iter().enumerate()
+    let visible: Vec<usize> = agents
+        .iter()
+        .enumerate()
         .filter(|(_, (_, g))| *g == group)
         .map(|(i, _)| i)
         .collect();
@@ -50,25 +54,33 @@ fn pane_navigation_within_group() {
 
     // D (pane right)
     if let Some(pos) = visible.iter().position(|&i| i == focused) {
-        if pos < visible.len() - 1 { focused = visible[pos + 1]; }
+        if pos < visible.len() - 1 {
+            focused = visible[pos + 1];
+        }
     }
     assert_eq!(focused, 1);
 
     // D again
     if let Some(pos) = visible.iter().position(|&i| i == focused) {
-        if pos < visible.len() - 1 { focused = visible[pos + 1]; }
+        if pos < visible.len() - 1 {
+            focused = visible[pos + 1];
+        }
     }
     assert_eq!(focused, 3); // skips index 2 (different group)
 
     // D at end -> stays
     if let Some(pos) = visible.iter().position(|&i| i == focused) {
-        if pos < visible.len() - 1 { focused = visible[pos + 1]; }
+        if pos < visible.len() - 1 {
+            focused = visible[pos + 1];
+        }
     }
     assert_eq!(focused, 3);
 
     // A (pane left)
     if let Some(pos) = visible.iter().position(|&i| i == focused) {
-        if pos > 0 { focused = visible[pos - 1]; }
+        if pos > 0 {
+            focused = visible[pos - 1];
+        }
     }
     assert_eq!(focused, 1);
 }
@@ -79,16 +91,22 @@ fn group_navigation() {
     let mut focused_group = 0usize;
 
     // S (down)
-    if focused_group < groups.len().saturating_sub(1) { focused_group += 1; }
+    if focused_group < groups.len().saturating_sub(1) {
+        focused_group += 1;
+    }
     assert_eq!(focused_group, 1);
     assert_eq!(groups[focused_group], "cuda");
 
     // S again
-    if focused_group < groups.len().saturating_sub(1) { focused_group += 1; }
+    if focused_group < groups.len().saturating_sub(1) {
+        focused_group += 1;
+    }
     assert_eq!(focused_group, 2);
 
     // S at bottom -> stays
-    if focused_group < groups.len().saturating_sub(1) { focused_group += 1; }
+    if focused_group < groups.len().saturating_sub(1) {
+        focused_group += 1;
+    }
     assert_eq!(focused_group, 2);
 
     // W (up)
@@ -110,7 +128,9 @@ fn zoom_bounds() {
     assert!((scale - 1.1).abs() < 0.001);
 
     // Zoom to max
-    for _ in 0..20 { scale = (scale + 0.1).min(2.0); }
+    for _ in 0..20 {
+        scale = (scale + 0.1).min(2.0);
+    }
     assert!((scale - 2.0).abs() < 0.001);
 
     // Zoom out
@@ -118,7 +138,9 @@ fn zoom_bounds() {
     assert!((scale - 1.9).abs() < 0.001);
 
     // Zoom to min
-    for _ in 0..30 { scale = (scale - 0.1).max(0.5); }
+    for _ in 0..30 {
+        scale = (scale - 0.1).max(0.5);
+    }
     assert!((scale - 0.5).abs() < 0.001);
 
     // Reset
@@ -132,21 +154,24 @@ fn palette_fuzzy_filter() {
 
     // Empty query -> all
     let query = "";
-    let filtered: Vec<&&str> = items.iter()
+    let filtered: Vec<&&str> = items
+        .iter()
         .filter(|i| query.is_empty() || i.to_lowercase().contains(query))
         .collect();
     assert_eq!(filtered.len(), 3);
 
     // "new" -> matches 2
     let query = "new";
-    let filtered: Vec<&&str> = items.iter()
+    let filtered: Vec<&&str> = items
+        .iter()
         .filter(|i| query.is_empty() || i.to_lowercase().contains(query))
         .collect();
     assert_eq!(filtered.len(), 2);
 
     // "quit" -> matches 1
     let query = "quit";
-    let filtered: Vec<&&str> = items.iter()
+    let filtered: Vec<&&str> = items
+        .iter()
         .filter(|i| query.is_empty() || i.to_lowercase().contains(query))
         .collect();
     assert_eq!(filtered.len(), 1);
@@ -154,7 +179,8 @@ fn palette_fuzzy_filter() {
 
     // "xyz" -> matches 0
     let query = "xyz";
-    let filtered: Vec<&&str> = items.iter()
+    let filtered: Vec<&&str> = items
+        .iter()
         .filter(|i| query.is_empty() || i.to_lowercase().contains(query))
         .collect();
     assert_eq!(filtered.len(), 0);
@@ -166,8 +192,12 @@ fn session_id_parsing() {
     let (sid, prompt) = if let Some(rest) = raw.strip_prefix("SESSION:") {
         if let Some(nl) = rest.find('\n') {
             (Some(rest[..nl].to_string()), rest[nl + 1..].to_string())
-        } else { (None, raw.clone()) }
-    } else { (None, raw.clone()) };
+        } else {
+            (None, raw.clone())
+        }
+    } else {
+        (None, raw.clone())
+    };
 
     assert_eq!(sid, Some("abc123".to_string()));
     assert_eq!(prompt, "What is 2+2?");
@@ -239,7 +269,10 @@ fn classify_error_lines() {
 
 #[test]
 fn classify_thinking() {
-    assert_eq!(classify_line("[think] considering options"), LineKind::Thinking);
+    assert_eq!(
+        classify_line("[think] considering options"),
+        LineKind::Thinking
+    );
 }
 
 #[test]
@@ -267,7 +300,9 @@ fn search_filter_basic() {
         "Something else".to_string(),
     ];
     let query = "hello";
-    let results: Vec<(usize, &str)> = lines.iter().enumerate()
+    let results: Vec<(usize, &str)> = lines
+        .iter()
+        .enumerate()
         .filter(|(_, l)| l.to_lowercase().contains(query))
         .map(|(i, l)| (i, l.as_str()))
         .collect();
@@ -280,7 +315,8 @@ fn search_filter_basic() {
 fn search_filter_empty_query() {
     let lines = vec!["a".to_string(), "b".to_string()];
     let query = "";
-    let results: Vec<&String> = lines.iter()
+    let results: Vec<&String> = lines
+        .iter()
         .filter(|l| query.is_empty() || l.to_lowercase().contains(query))
         .collect();
     // Empty query matches nothing in actual search (early return)
@@ -292,7 +328,8 @@ fn search_filter_empty_query() {
 fn search_filter_no_match() {
     let lines = vec!["foo".to_string(), "bar".to_string()];
     let query = "xyz";
-    let results: Vec<&String> = lines.iter()
+    let results: Vec<&String> = lines
+        .iter()
         .filter(|l| l.to_lowercase().contains(query))
         .collect();
     assert_eq!(results.len(), 0);
@@ -308,7 +345,9 @@ fn search_result_cap() {
     for (i, line) in lines.iter().enumerate() {
         if line.to_lowercase().contains(query) {
             results.push((i, line.clone()));
-            if results.len() >= cap { break; }
+            if results.len() >= cap {
+                break;
+            }
         }
     }
     assert_eq!(results.len(), 50);
@@ -319,7 +358,11 @@ fn search_result_cap() {
 #[test]
 fn view_mode_switching() {
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    enum VM { Grid, Pipeline, Focus }
+    enum VM {
+        Grid,
+        Pipeline,
+        Focus,
+    }
 
     let mut mode = VM::Grid;
     assert_eq!(mode, VM::Grid);
@@ -390,12 +433,27 @@ fn reject_clears_pending() {
 
 #[test]
 fn model_filter_free_only() {
-    struct M { id: &'static str, free: bool }
+    struct M {
+        id: &'static str,
+        free: bool,
+    }
     let models = vec![
-        M { id: "opus", free: false },
-        M { id: "o4-mini", free: true },
-        M { id: "gpt-4.1", free: true },
-        M { id: "o3", free: false },
+        M {
+            id: "opus",
+            free: false,
+        },
+        M {
+            id: "o4-mini",
+            free: true,
+        },
+        M {
+            id: "gpt-4.1",
+            free: true,
+        },
+        M {
+            id: "o3",
+            free: false,
+        },
     ];
     let free: Vec<&str> = models.iter().filter(|m| m.free).map(|m| m.id).collect();
     assert_eq!(free, vec!["o4-mini", "gpt-4.1"]);
@@ -422,4 +480,71 @@ fn theme_cycling() {
     current_idx = (current_idx + 1) % themes.len();
     assert_eq!(current_idx, 0);
     assert_eq!(themes[current_idx], "midnight");
+}
+
+// ── Cursor / UTF-8 safety tests ──────────────────────────────────
+
+/// Simulates the word-boundary logic used by cursor_word_left and delete_word_back.
+fn word_left_target(buf: &str, cursor: usize) -> usize {
+    let s = &buf[..cursor];
+    let trimmed = s.trim_end();
+    if trimmed.is_empty() {
+        0
+    } else {
+        trimmed
+            .char_indices()
+            .filter(|(_, c)| c.is_whitespace())
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0)
+    }
+}
+
+#[test]
+fn word_left_ascii() {
+    let buf = "hello world";
+    assert_eq!(word_left_target(buf, buf.len()), 6);
+    assert_eq!(word_left_target(buf, 6), 0);
+}
+
+#[test]
+fn word_left_multibyte_whitespace() {
+    let buf = "hello\u{3000}world";
+    assert_eq!(buf.len(), 13);
+    assert_eq!(word_left_target(buf, buf.len()), 8);
+    assert!(buf.is_char_boundary(8));
+}
+
+#[test]
+fn word_left_multibyte_content() {
+    let buf = "café world";
+    let target = word_left_target(buf, buf.len());
+    assert_eq!(target, 6);
+    assert!(buf.is_char_boundary(target));
+    assert_eq!(&buf[target..], "world");
+}
+
+#[test]
+fn word_left_emoji_content() {
+    let buf = "🦊 run fast";
+    assert_eq!(buf.len(), 13);
+    let target = word_left_target(buf, buf.len());
+    assert_eq!(target, 9);
+    assert!(buf.is_char_boundary(target));
+    assert_eq!(&buf[target..], "fast");
+}
+
+#[test]
+fn word_left_no_whitespace() {
+    assert_eq!(word_left_target("helloworld", 10), 0);
+}
+
+#[test]
+fn word_left_only_whitespace() {
+    assert_eq!(word_left_target("   ", 3), 0);
+}
+
+#[test]
+fn word_left_empty() {
+    assert_eq!(word_left_target("", 0), 0);
 }
