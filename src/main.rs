@@ -1462,6 +1462,27 @@ impl OpenSquirrel {
         self.save_state();
     }
 
+    fn remove_group(&mut self, gi: usize) {
+        if self.groups.len() <= 1 || gi >= self.groups.len() { return; }
+        let removed_name = self.groups[gi].name.clone();
+        let fallback = self.groups.iter()
+            .find(|g| g.name != removed_name)
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| "default".into());
+        for agent in &mut self.agents {
+            if agent.group == removed_name {
+                agent.group = fallback.clone();
+            }
+        }
+        self.groups.remove(gi);
+        if self.focused_group >= self.groups.len() {
+            self.focused_group = self.groups.len().saturating_sub(1);
+        }
+        self.clamp_focus();
+        self.save_config();
+        self.save_state();
+    }
+
     fn truncate_for_summary(text: &str, max_len: usize) -> String {
         if text.len() <= max_len {
             text.to_string()
@@ -3782,24 +3803,40 @@ impl OpenSquirrel {
                     let focused = gi == self.focused_group;
                     let bg = if focused { surface_raised } else { rgba(0x00000000) };
                     let tc = if focused { t.text() } else { t.text_muted() };
+                    let can_delete_group = self.groups.len() > 1;
 
-                    sb = sb.child(
-                        div().id(ElementId::Name(format!("grp-{}", gi).into()))
-                            .w_full().px(self.s(8.0)).py(self.s(5.0)).rounded(self.s(6.0)).bg(bg)
-                            .cursor_pointer()
-                            .flex().items_center().gap(self.s(8.0))
-                            .child(div().text_size(self.s(11.0)).text_color(if focused { t.blue() } else { t.text_faint() }).child(if focused { ">" } else { " " }))
-                            .child(div().text_size(self.s(13.0)).text_color(tc).child(group.name.clone()))
-                            .child(div().flex_grow())
-                            .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(
-                                format!("{}", self.agents.iter().filter(|a| a.group == group.name).count())
-                            ))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.focused_group = gi;
-                                this.clamp_focus();
-                                cx.notify();
-                            })),
-                    );
+                    let mut group_row = div().id(ElementId::Name(format!("grp-{}", gi).into()))
+                        .w_full().px(self.s(8.0)).py(self.s(5.0)).rounded(self.s(6.0)).bg(bg)
+                        .cursor_pointer()
+                        .flex().items_center().gap(self.s(8.0))
+                        .child(div().text_size(self.s(11.0)).text_color(if focused { t.blue() } else { t.text_faint() }).child(if focused { ">" } else { " " }))
+                        .child(div().text_size(self.s(13.0)).text_color(tc).child(group.name.clone()))
+                        .child(div().flex_grow())
+                        .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(
+                            format!("{}", self.agents.iter().filter(|a| a.group == group.name).count())
+                        ))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.focused_group = gi;
+                            this.clamp_focus();
+                            cx.notify();
+                        }));
+
+                    if can_delete_group {
+                        group_row = group_row.child(
+                            div().id(ElementId::Name(format!("del-grp-{}", gi).into()))
+                                .px(self.s(4.0)).rounded(self.s(4.0))
+                                .cursor_pointer()
+                                .text_size(self.s(11.0)).text_color(t.text_faint())
+                                .hover(|s| s.text_color(t.red()))
+                                .child("×")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.remove_group(gi);
+                                    cx.notify();
+                                }))
+                        );
+                    }
+
+                    sb = sb.child(group_row);
 
                     if focused {
                         for (i, agent) in self.agents.iter().enumerate() {
@@ -3818,6 +3855,18 @@ impl OpenSquirrel {
                                     .child(div().text_size(self.s(12.0)).text_color(tc).child(format!("{}{}{}", role_icon, fav_icon, agent.name)))
                                     .child(div().flex_grow())
                                     .child(div().text_size(self.s(10.0)).text_color(t.text_faint()).child(format!("{}@{}", agent.runtime_name, agent.target_machine)))
+                                    .child(
+                                        div().id(ElementId::Name(format!("del-sa-{}", i).into()))
+                                            .px(self.s(4.0)).rounded(self.s(4.0))
+                                            .cursor_pointer()
+                                            .text_size(self.s(11.0)).text_color(t.text_faint())
+                                            .hover(|s| s.text_color(t.red()))
+                                            .child("×")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.confirm_remove_agent = Some(i);
+                                                cx.notify();
+                                            }))
+                                    )
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.set_focus(i);
                                         cx.notify();
@@ -4307,6 +4356,7 @@ impl OpenSquirrel {
                 div().id(ElementId::Name(format!("empty-click-{}", idx).into()))
                     .flex_grow().w_full().cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.mode == Mode::Setup || this.mode == Mode::Palette { return; }
                         this.set_focus(idx);
                         this.set_mode(Mode::Normal);
                         cx.notify();
@@ -4674,12 +4724,23 @@ impl OpenSquirrel {
         ];
         let mut step_row = div().w_full().px(self.s(14.0)).py(self.s(10.0)).border_b_1().border_color(t.palette_border())
             .flex().items_center().gap(self.s(16.0));
-        for (label, step) in &steps {
+        for (si, (label, step)) in steps.iter().enumerate() {
             let active = setup.step == *step;
             let c = if active { t.blue() } else { t.text_faint() };
-            step_row = step_row.child(div().text_size(self.s(12.0)).text_color(c).child(
-                if active { format!("> {}", label) } else { label.to_string() }
-            ));
+            let target_step = *step;
+            step_row = step_row.child(
+                div().id(ElementId::Name(format!("setup-tab-{}", si).into()))
+                    .cursor_pointer()
+                    .text_size(self.s(12.0)).text_color(c)
+                    .hover(|s| s.text_color(t.blue()))
+                    .child(if active { format!("> {}", label) } else { label.to_string() })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(ref mut s) = this.setup {
+                            s.step = target_step;
+                        }
+                        cx.notify();
+                    }))
+            );
         }
         w = w.child(step_row);
 
@@ -4702,9 +4763,12 @@ impl OpenSquirrel {
                                 .child(rt.name.clone()))
                             .child(div().flex_grow())
                             .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(rt.description.clone()))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                                 if let Some(ref mut s) = this.setup {
                                     s.runtime_cursor = i;
+                                }
+                                if event.click_count() == 2 {
+                                    this.setup_next(&SetupNext, window, cx);
                                 }
                                 cx.notify();
                             })),
@@ -4828,9 +4892,12 @@ impl OpenSquirrel {
                                     .child(model.label.clone()))
                                 .child(div().flex_grow())
                                 .child(div().text_size(self.s(9.0)).text_color(t.text_faint()).child(format!("{}{}", model.id, free_tag)))
-                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                                     if let Some(ref mut s) = this.setup {
                                         s.model_cursor = list_idx;
+                                    }
+                                    if event.click_count() == 2 {
+                                        this.setup_next(&SetupNext, window, cx);
                                     }
                                     cx.notify();
                                 })),
@@ -4855,7 +4922,8 @@ impl OpenSquirrel {
                         "local".to_string()
                     };
                     w = w.child(
-                        div().w_full().px(self.s(14.0)).py(self.s(6.0))
+                        div().id(ElementId::Name(format!("smach-{}", i).into()))
+                            .w_full().px(self.s(14.0)).py(self.s(6.0))
                             .cursor_pointer()
                             .bg(if sel { t.selected_row() } else { rgba(0x00000000) })
                             .flex().items_center().gap(self.s(10.0))
@@ -4864,7 +4932,16 @@ impl OpenSquirrel {
                             .child(div().text_size(self.s(13.0)).text_color(if sel { t.text() } else { t.text_muted() })
                                 .child(machine.name.clone()))
                             .child(div().flex_grow())
-                            .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(detail)),
+                            .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(detail))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                if let Some(ref mut s) = this.setup {
+                                    s.machine_cursor = i;
+                                }
+                                if event.click_count() == 2 {
+                                    this.setup_next(&SetupNext, window, cx);
+                                }
+                                cx.notify();
+                            })),
                     );
                 }
             }
@@ -4912,14 +4989,25 @@ impl OpenSquirrel {
                         format!("~{}", &dir[home.len()..])
                     } else { dir.clone() };
                     w = w.child(
-                        div().w_full().px(self.s(14.0)).py(self.s(4.0))
+                        div().id(ElementId::Name(format!("sdir-{}", list_idx).into()))
+                            .w_full().px(self.s(14.0)).py(self.s(4.0))
+                            .cursor_pointer()
                             .bg(if sel { t.selected_row() } else { rgba(0x00000000) })
                             .flex().items_center().gap(self.s(10.0)).overflow_hidden()
                             .child(div().text_size(self.s(12.0)).text_color(if sel { t.blue() } else { t.text_faint() })
                                 .child(if sel { ">" } else { " " }))
                             .child(div().flex_shrink().min_w(px(0.)).text_size(self.s(12.0))
                                 .text_color(if sel { t.text() } else { t.text_muted() })
-                                .child(display)),
+                                .child(display))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                if let Some(ref mut s) = this.setup {
+                                    s.dir_cursor = list_idx;
+                                }
+                                if event.click_count() == 2 {
+                                    this.setup_next(&SetupNext, window, cx);
+                                }
+                                cx.notify();
+                            })),
                     );
                 }
                 if filtered.len() > visible_count {
@@ -4936,7 +5024,9 @@ impl OpenSquirrel {
                     let checkbox = if checked { "[x]" } else { "[ ]" };
                     let locked = mcp.global;
                     w = w.child(
-                        div().w_full().px(self.s(14.0)).py(self.s(6.0))
+                        div().id(ElementId::Name(format!("smcp-{}", i).into()))
+                            .w_full().px(self.s(14.0)).py(self.s(6.0))
+                            .cursor_pointer()
                             .bg(if cursor { t.selected_row() } else { rgba(0x00000000) })
                             .flex().items_center().gap(self.s(10.0))
                             .child(div().text_size(self.s(13.0)).text_color(
@@ -4948,7 +5038,24 @@ impl OpenSquirrel {
                             .child(div().flex_grow())
                             .child(div().text_size(self.s(11.0)).text_color(t.text_faint()).child(
                                 if locked { format!("{} (global)", mcp.description) } else { mcp.description.clone() }
-                            )),
+                            ))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                if let Some(ref mut s) = this.setup {
+                                    s.mcp_cursor = i;
+                                    // Toggle the MCP on single click (unless it's global/locked)
+                                    if event.click_count() == 1 {
+                                        if !this.config.mcps.get(i).map(|m| m.global).unwrap_or(false) {
+                                            if let Some(v) = s.selected_mcps.get_mut(i) {
+                                                *v = !*v;
+                                            }
+                                        }
+                                    }
+                                }
+                                if event.click_count() == 2 {
+                                    this.setup_next(&SetupNext, window, cx);
+                                }
+                                cx.notify();
+                            })),
                     );
                 }
             }
