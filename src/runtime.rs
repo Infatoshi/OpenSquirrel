@@ -225,6 +225,9 @@ fn parse_claude_json(
                 let _ = msg_tx.send_blocking(AgentMsg::Error(message.to_string()));
             }
             "assistant" => {
+                // Only extract tool_use from assistant messages.
+                // Text content arrives via content_block_delta streaming events,
+                // so we don't re-emit text here to avoid duplication.
                 if let Some(content) = value
                     .get("message")
                     .and_then(|message| message.get("content"))
